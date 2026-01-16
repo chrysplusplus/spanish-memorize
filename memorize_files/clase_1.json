@@ -1,0 +1,114 @@
+{
+  "class_name": "Clase 1: Las Partes del Cuerpo",
+  "categories": [
+    {
+      "category_name": "El Cuerpo",
+      "category_type": "vocabulary",
+      "category_contents": [
+        { "es": [ "el antebrazo" ], "en": "the forearm" },
+        { "es": [ "la axila", "el sobaco" ], "en": "the armpit" },
+        { "es": [ "el brazo" ], "en": "the arm" },
+        { "es": [ "la barriga", "el abdomen" ], "en": "the tummy" },
+        { "es": [ "el codo" ], "en": "the elbow" },
+        { "es": [ "el culo" ], "en": "the ass" },
+        { "es": [ "la cabeza" ], "en": "the head" },
+        { "es": [ "la cadera" ], "en": "the hip" },
+        { "es": [ "la cintura" ], "en": "the waist" },
+        { "es": [ "los dedos del pie" ], "en": "the toes" },
+        { "es": [ "la espalda" ], "en": "the back" },
+        { "es": [ "el hombro" ], "en": "the shoulder" },
+        { "es": [ "el muslo" ], "en": "the thigh" },
+        { "es": [ "la muñeca" ], "en": "the wrist" },
+        { "es": [ "el ombligo" ], "en": "the belly-button" },
+        { "es": [ "el pezón" ], "en": "the nipple" },
+        { "es": [ "el pie" ], "en": "the foot" },
+        { "es": [ "la pierna" ], "en": "the leg" },
+        { "es": [ "la rodilla" ], "en": "the knee" },
+        { "es": [ "el tronco" ], "en": "the torso" },
+        { "es": [ "la teta", "el pecho", "el seno" ], "en": "the breast" },
+        { "es": [ "el bigote" ], "en": "the moustache" },
+        { "es": [ "la barba" ], "en": "the beard" },
+        { "es": [ "la mano" ], "en": "the hand" },
+        { "es": [ "el dedo" ], "en": "the finger" },
+        { "es": [ "la piel" ], "en": "the skin" }
+      ]
+    },
+    {
+      "category_name": "La Cara",
+      "category_type": "vocabulary",
+      "category_contents": [
+        { "es": [ "la arruga" ], "en": "the wrinkle" },
+        { "es": [ "la barbilla", "el menton" ], "en": "the chin" },
+        { "es": [ "la boca" ], "en": "the mouth" },
+        { "es": [ "el cuello" ], "en": "the neck" },
+        { "es": [ "la ceja" ], "en": "the eyebrow" },
+        { "es": [ "la frente" ], "en": "the forehead" },
+        { "es": [ "la mandíbula" ], "en": "the jaw" },
+        { "es": [ "la mejilla" ], "en": "the cheek" },
+        { "es": [ "la nariz" ], "en": "the nose" },
+        { "es": [ "el ojo" ], "en": "the eye" },
+        { "es": [ "el pelo", "el cabello" ], "en": "the hair" },
+        { "es": [ "la pestaña" ], "en": "the eyelash"},
+        { "es": [ "el párpado" ], "en": "the eyelid" },
+        { "es": [ "la pupila" ], "en": "the pupil" },
+        { "es": [ "el iris" ], "en": "the iris" },
+        { "es": [ "el labio" ], "en": "the lip"},
+        { "es": [ "el diente" ], "en": "the tooth" },
+        { "es": [ "la lengua" ], "en": "the tongue"}
+      ]
+    },
+    {
+      "category_name": "El Pelo",
+      "category_type": "vocabulary",
+      "category_contents": [
+        { "es": [ "pelo gris" ], "en": "grey hair" },
+        { "es": [ "pelo blanco" ], "en": "white hair" },
+        { "es": [ "pelo rubio" ], "en": "blond hair" },
+        { "es": [ "pelo castaño" ], "en": "brown hair" },
+        { "es": [ "canas" ], "en": "grey hairs or greying hairs" },
+        { "es": [ "pelo teñido" ], "en": "dyed hair" },
+        { "es": [ "pelirrojo" ], "en": "ginger hair" },
+        { "es": [ "un chico moreno" ], "en": "a dark-haired or dark-skinned person" },
+        { "es": [ "un chico rubio" ], "en": "a light-haired or light-skinned person" },
+        { "es": [ "pelo rizo", "pelo rizado" ], "en": "curly hair" },
+        { "es": [ "pelo liso" ], "en": "straight hair" },
+        { "es": [ "rasta" ], "en": "dreadlocks" },
+        { "es": [ "pelo recogido" ], "en": "tied-back hair" },
+        { "es": [ "la coleta" ], "en": "the ponytail" },
+        { "es": [ "la trenza" ], "en": "the braid" },
+        { "es": [ "pelo largo" ], "en": "long hair" },
+        { "es": [ "pelo corto" ], "en": "short hair" },
+        { "es": [ "el flequillo" ], "en": "the fringe" },
+        { "es": [ "una mujer calva" ], "en": "a bald woman" },
+        { "es": [ "la calva" ], "en": "the bald-patch" }
+      ]
+    },
+    {
+      "category_name": "La Mano",
+      "category_type": "vocabulary",
+      "category_contents": [
+        { "es": [ "pulgar" ], "en": "thumb" },
+        { "es": [ "índice" ], "en": "index finger" },
+        { "es": [ "corazón" ], "en": "middle finger" },
+        { "es": [ "anular" ], "en": "ring finger" },
+        { "es": [ "meñique" ], "en": "little finger" },
+        { "es": [ "uña" ], "en": "fingernail" }
+      ]
+    },
+    {
+      "category_name": "Adjectivos",
+      "category_type": "vocabulary",
+      "category_contents": [
+        { "es": [ "bajo" ], "en": "short in stature" },
+        { "es": [ "alto" ], "en": "tall" },
+        { "es": [ "gordo" ], "en": "fat" },
+        { "es": [ "flaco", "delgado" ], "en": "thin" },
+        { "es": [ "guapo" ], "en": "good-looking" },
+        { "es": [ "feo" ], "en": "ugly" },
+        { "es": [ "joven" ], "en": "young" },
+        { "es": [ "viejo" ], "en": "old" },
+        { "es": [ "musculoso" ], "en": "muscly" }
+      ]
+    }
+  ]
+}
