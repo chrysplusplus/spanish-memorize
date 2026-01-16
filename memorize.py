@@ -308,7 +308,7 @@ def configure_session_interactively(classes: list[Class]) -> PracticeSession:
 
     dictionary = make_language_dictionary(categories)
     languages = select_language_interactively(list(dictionary.keys()))
-    return PracticeSession(categories, dictionary, dictionary[languages])
+    return PracticeSession(categories, languages, dictionary[languages])
 
 def ask_rounds() -> int:
     '''Prompt user for number of rounds from selection'''
