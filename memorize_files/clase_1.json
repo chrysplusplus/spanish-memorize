@@ -30,7 +30,11 @@
         { "es": [ "la barba" ], "en": "the beard" },
         { "es": [ "la mano" ], "en": "the hand" },
         { "es": [ "el dedo" ], "en": "the finger" },
-        { "es": [ "la piel" ], "en": "the skin" }
+        { "es": [ "la piel" ], "en": "the skin" },
+        { "es": [ "el talón" ], "en": "the heel" },
+        { "es": [ "el tobillo" ], "en": "the ankle" },
+        { "es": [ "el nudillo" ], "en": "the knuckle" },
+        { "es": [ "la articulación" ], "en": "the joint" }
       ]
     },
     {
@@ -92,7 +96,10 @@
         { "es": [ "corazón" ], "en": "middle finger" },
         { "es": [ "anular" ], "en": "ring finger" },
         { "es": [ "meñique" ], "en": "little finger" },
-        { "es": [ "uña" ], "en": "fingernail" }
+        { "es": [ "uña" ], "en": "fingernail" },
+        { "es": [ "palma" ], "en": "palm of the hand" },
+        { "es": [ "yemas de los dedos" ], "en": "fingertips" },
+        { "es": [ "puño" ], "en": "fist" }
       ]
     },
     {
