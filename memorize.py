@@ -3,11 +3,18 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from typing import Optional, Any, Iterable
+from argparse import ArgumentParser
 
 import json
 import random
 import re
-import sys
+
+USE_CURSES: bool
+try:
+    import curses
+    USE_CURSES = True
+except ImportError:
+    USE_CURSES = False
 
 class CategoryType(Enum):
     Unknown = auto()
@@ -39,8 +46,8 @@ class PracticeSession:
 
     total_tests: int = 0
     streak: int = 0
-    missed_words: list[str] = field(default_factory = list)
-    recent_words: list[str] = field(default_factory = list)
+    missed_words: list[str] = field(default_factory = list[str])
+    recent_words: list[str] = field(default_factory = list[str])
     use_recent_words = True
 
 class UserQuit(Exception):
@@ -59,8 +66,8 @@ MINIMUM_STREAK_DISPLAY = 5
 DEFAULT_NUMBER_OF_ROUNDS = 10
 RECENT_WORDS_COUNT = 10
 
-def filter_exists[T](iterable: Iterable[T]) -> Iterable[T]:
-    return filter(lambda o: o is not None, iterable)
+def filter_exists[T](iterable: Iterable[T | None]) -> Iterable[T]:
+    return (o for o in iterable if o is not None)
 
 def json_to_str(json_str: Any) -> Optional[str]:
     return json_str if isinstance(json_str, str) else None
@@ -195,7 +202,6 @@ def selection_string_to_indices(response: str, classes: list[Class]) -> list[tup
 def select_categories_from_classes_interactively(classes: list[Class]) -> list[Category]:
     '''Prompt user to select categories from list'''
     print_category_selection_screen(classes)
-    choices: list[tuple[int,int]] = []
     print("Enter your selection: ('q' quits) ", end = '')
     response = input()
     if response.lower() == 'q':
@@ -282,6 +288,7 @@ def select_language_interactively(languages_keys: list[LanguagesKey]) -> Languag
     print()
     choice: int | None = None
     while choice is None:
+        response = ''
         try:
             print("Enter your selection: ('q' quits) ", end = '')
             response = input()
@@ -290,7 +297,7 @@ def select_language_interactively(languages_keys: list[LanguagesKey]) -> Languag
                 raise UserQuit
 
             choice = int(response)
-            if response < 1 or response > len(languages_keys):
+            if choice < 1 or choice > len(languages_keys):
                 print(f"Choice out of range: {choice}")
                 choice = None
 
@@ -315,12 +322,13 @@ def ask_rounds() -> int:
     selection = (5,10, 20, 50)
     selection_strings = tuple(f"{n} rounds" for n in selection)
     print("How many rounds?")
-    print(f"\t1. {selection[0]}\t\t2. {selection[1]}")
-    print(f"\t3. {selection[2]}\t\t4. {selection[3]}")
+    print(f"\t1. {selection_strings[0]}\t\t2. {selection_strings[1]}")
+    print(f"\t3. {selection_strings[2]}\t\t4. {selection_strings[3]}")
     print()
 
     choice = None
     while choice is None:
+        response = ''
         try:
             print("Enter your selection: ('q' quits) ", end = '')
             response = input()
@@ -454,8 +462,7 @@ def play_memorize_game(session: PracticeSession) -> None:
             response = input()
             rounds_left = ask_rounds() if response.lower() == 'y' else 0
 
-def main():
-    classes = load_classes()
+def main_terminal_mode(classes: list[Class]) -> None:
     print_classes_summary(classes)
 
     try:
@@ -475,6 +482,47 @@ def main():
             print(f"\t{word}")
 
     input()
+
+def configure_session_tui(classes: list[Class]) -> PracticeSession:
+    ...
+
+def play_memorize_game_tui(session: PracticeSession) -> None:
+    ...
+
+def display_summary_screen(session: PracticeSession) -> None:
+    ...
+
+def exit_tui():
+    ...
+
+IS_TUI_IMPLEMENTED = False
+
+def main_tui_mode(classes: list[Class]) -> None:
+    if not IS_TUI_IMPLEMENTED:
+        print("TUI mode not yet implemented, so falling back to old interface")
+        return main_terminal_mode(classes)
+
+    try:
+        session = configure_session_tui(classes)
+        play_memorize_game_tui(session)
+        display_summary_screen(session)
+
+    except UserQuit:
+        exit_tui()
+        return
+
+argparser = ArgumentParser(description = "Practice learning languages")
+argparser.add_argument('--no-curses', action = 'store_true', help = \
+        "Do not use curses python library")
+
+def main():
+    program_args = argparser.parse_args()
+    classes = load_classes()
+    if not USE_CURSES or program_args.no_curses:
+        main_terminal_mode(classes)
+
+    else:
+        main_tui_mode(classes)
 
 if __name__ == "__main__":
     main()
