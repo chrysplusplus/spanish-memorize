@@ -1,10 +1,11 @@
+from argparse import ArgumentParser
 from collections import namedtuple
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, Any, Iterable
-from argparse import ArgumentParser
+from typing import Callable, Optional, Any, Iterable, Self
 
+import itertools
 import json
 import random
 import re
@@ -483,8 +484,245 @@ def main_terminal_mode(classes: list[Class]) -> None:
 
     input()
 
-def configure_session_tui(classes: list[Class]) -> PracticeSession:
+# TODO: move to class section
+@dataclass
+class CheckboxMenuEntry:
+    text: str
+    enabled: bool = field(default = False, kw_only = True)
+
+# TODO: move to class section
+@dataclass
+class CheckboxMenu:
+    title: str
+    entries: list[CheckboxMenuEntry] = field(default_factory = list[CheckboxMenuEntry])
+
+# TODO move to class section
+@dataclass
+class TuiContext:
+    stdscr: curses.window   # type: ignore
+
+    cursor: tuple[int,int] = (0,0)
+    context_stack: list[Callable[[Self], None]] = field(
+            default_factory = list[Callable[[Self], None]])
+    variables: dict[str, Any] = field(default_factory = dict[str, Any])
+    callbacks: dict[int, Callable[[Self], None]] = field(
+            default_factory = dict[int, Callable[[Self], None]])
+
+# TODO move to class section
+@dataclass
+class TuiLayout:
+    tui: TuiContext
+    centered_x: bool
+    centered_y: bool
+    padding: int
+
+    offset_x: int = 0
+    offset_y: int = 0
+    items: list[list[str]] = field(
+            default_factory = list[list[str]])
+
+def init_tui_context(stdscr: curses.window):    # type: ignore
+    # clear and refresh on initialisation
+    stdscr.clear()
+    stdscr.refresh()
+
+    # define application colours NOTE: hardcoded for now
+    curses.start_color()                                        # type: ignore
+    curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)  # type: ignore
+    curses.init_pair(2, curses.COLOR_RED, curses.COLOR_BLACK)   # type: ignore
+    curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_WHITE) # type: ignore
+
+    return TuiContext(stdscr)
+
+def get_tui_screen_size(tui: TuiContext) -> tuple[int,int]:
+    '''Get the maxy,maxx for the TUI'''
+    return tui.stdscr.getmaxyx()
+
+def make_tui_int_variable(tui: TuiContext, variable_name: str, initial_value: int) -> bool:
+    '''Create a integer variable in the TUI context
+
+    Return False if variable already exists'''
+    if tui.variables.get(variable_name, None) is not None:
+        return False
+
+    tui.variables[variable_name] = initial_value
+    return True
+
+def map_key_callback(
+        tui: TuiContext,
+        key_code: int,
+        callback: Callable[[TuiContext], None]
+        ) -> bool:
+    '''Map a key to a callback
+
+    Return False if mapping already exists'''
+    if tui.callbacks.get(key_code, None) is not None:
+        return False
+
+    tui.callbacks[key_code] = callback
+    return True
+
+def tui_begin_draw(tui: TuiContext):
+    '''Prepare TUI context for drawing the next screen state'''
+    tui.context_stack.clear()
+
+def tui_end_draw(tui: TuiContext):
+    '''Call drawing callbacks stored in the context'''
+    for draw_call in tui.context_stack:
+        draw_call(tui)
+
+def tui_clear_screen(tui: TuiContext):
+    '''Clear the TUI'''
+    tui.stdscr.clear()
+
+def tui_refresh_screen(tui: TuiContext):
+    '''Refresh the TUI'''
+    tui.stdscr.refresh()
+
+def clear_screen(tui: TuiContext):
+    '''Draw call for clearing the screen'''
+    def draw_call(t: TuiContext):
+        tui_clear_screen(t)
+
+    tui.context_stack.append(draw_call)
+
+def refresh_screen(tui: TuiContext):
+    '''Draw call for refreshing the screen'''
+    def draw_call(t: TuiContext):
+        tui_refresh_screen(t)
+
+    tui.context_stack.append(draw_call)
+
+def tui_draw_text(tui: TuiContext, text: str, x: int, y: int):
+    '''Draw text starting at position on screen'''
+    tui.stdscr.addstr(y, x, text)
+
+def make_tui_layout(
+        tui: TuiContext, *,
+        centered_x: bool = False,
+        centered_y: bool = False,
+        padding   : int  = 0
+        ) -> TuiLayout:
+    '''Create automatic layout'''
+    if padding < 0:
+        raise ValueError(f"TuiLayout padding must be >= 0: {padding}")
+    layout = TuiLayout(tui, centered_x, centered_y, padding)
+    tui.context_stack.append(lambda t: draw_layout(t, layout))
+    return layout
+
+def draw_layout(tui: TuiContext, layout: TuiLayout):
+    '''Render layout to TUI'''
+    lines: list[str] = []
+    max_width: int = 0
+
+    for item_index,item in enumerate(layout.items):
+        if item_index != 0 and layout.padding != 0:
+            lines.extend(itertools.repeat("", layout.padding))
+
+        max_item_width = max(len(l) for l in item)
+        if max_item_width > max_width:
+            max_width = max_item_width
+
+        lines.extend(item)
+
+    width = max_width
+    height = len(lines)
+    screen_height,screen_width = get_tui_screen_size(tui)
+
+    # TODO: implement display offsets
+
+    if height > screen_height:
+        lines = lines[:screen_height]
+        height = screen_height
+
+    if width > screen_width:
+        width = screen_width
+
+    start_y = (screen_height - height) // 2
+    start_x = (screen_width - width) // 2
+    for line_index,line in enumerate(lines):
+        tui_draw_text(tui, line[:width], start_x, start_y + line_index)
+
+def add_text_to_layout(layout: TuiLayout, text: str):
+    '''Add text as item to layout'''
+    layout.items.append([ text ])
+
+def add_checkbox_menu_to_layout(layout: TuiLayout, menu: CheckboxMenu):
+    '''Render menu as text for layout item'''
+    lines: list[str] = []
+    lines.append(menu.title)
+    for entry in menu.entries:
+        button = "[X]" if entry.enabled else "[ ]"
+        lines.append(f"{button} {entry.text}")
+    layout.items.append(lines)
+
+def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class]) -> list[Category]:
+    '''Display TUI screen for selecting categories from classes'''
+    # NOTE: this is just first pass code and should be refactored
+    title_str = "The following classes are available:"
+    menus: list[CheckboxMenu] = []
+    for class_index,class_ in enumerate(classes):
+        class_id = class_index + 1
+        menu = CheckboxMenu(f"{class_id}. {class_.name}")
+        menus.append(menu)
+        for category_index,category in enumerate(class_.categories):
+            category_id = category_index + 1
+            # set everything enabled by default
+            menu.entries.append(CheckboxMenuEntry(f"{class_id}.{category_id} {category.name}", enabled = True))
+
+    tui_begin_draw(tui)
+    clear_screen(tui)
+
+    layout = make_tui_layout(tui, centered_x = True, centered_y = True, padding = 1)
+    add_text_to_layout(layout, title_str)
+    for menu in menus:
+        add_checkbox_menu_to_layout(layout, menu)
+
+    refresh_screen(tui)
+
+    #make_tui_int_variable(tui, "selected_class_index", 0)
+    #make_tui_int_variable(tui, "selected_category_index", 0)
+
+    #def on_quit(_):
+    #    raise UserQuit
+
+    #def selection_indices():
+    #    class_index = get_tui_int_variable(tui, "selected_class_index")
+    #    category_index = get_tui_int_variabl(tui, "selected_category_index")
+
+    #def on_down(_):
+    #    ...
+
+    #def on_up(_):
+    #    ...
+
+    #def on_enter(_):
+    #    ...
+
+    #def on_space(_):
+    #    ...
+
+    #map_key_callback(tui, ord('q'), on_quit)
+    #map_key_callback(tui, curses.KEY_DOWN, on_down)     # type: ignore
+    #map_key_callback(tui, curses.KEY_UP, on_up)         # type: ignore
+    #map_key_callback(tui, ord(' '), on_space)
+    #map_key_callback(tui, curses.KEY_ENTER, on_enter)   # type: ignore
+
+    tui_end_draw(tui)
+
+    while True:
+        ...
+
+def select_language_screen(languages_keys: list[LanguagesKey]) -> LanguagesKey:
     ...
+
+def configure_session_tui(tui: TuiContext, classes: list[Class]) -> PracticeSession:
+    '''Configure the practice session with TUI controls'''
+    # NOTE: this is just first pass code and should be refactored
+    categories = select_categories_from_classes_screen(tui, classes)
+    dictionary = make_language_dictionary(categories)
+    languages = select_language_screen(list(dictionary.keys()))
+    return PracticeSession(categories, languages, dictionary[languages])
 
 def play_memorize_game_tui(session: PracticeSession) -> None:
     ...
@@ -492,23 +730,14 @@ def play_memorize_game_tui(session: PracticeSession) -> None:
 def display_summary_screen(session: PracticeSession) -> None:
     ...
 
-def exit_tui():
-    ...
-
-IS_TUI_IMPLEMENTED = False
-
-def main_tui_mode(classes: list[Class]) -> None:
-    if not IS_TUI_IMPLEMENTED:
-        print("TUI mode not yet implemented, so falling back to old interface")
-        return main_terminal_mode(classes)
-
+def main_tui_mode(stdscr: curses.window, classes: list[Class]) -> None: # type: ignore
+    tui = init_tui_context(stdscr)
     try:
-        session = configure_session_tui(classes)
+        session = configure_session_tui(tui, classes)
         play_memorize_game_tui(session)
         display_summary_screen(session)
 
     except UserQuit:
-        exit_tui()
         return
 
 argparser = ArgumentParser(description = "Practice learning languages")
@@ -522,7 +751,8 @@ def main():
         main_terminal_mode(classes)
 
     else:
-        main_tui_mode(classes)
+        curses.wrapper(main_tui_mode, classes)  # type: ignore
 
 if __name__ == "__main__":
     main()
+
