@@ -13,6 +13,7 @@ import re
 USE_CURSES: bool
 try:
     import curses
+    import curses.ascii
     USE_CURSES = True
 except ImportError:
     USE_CURSES = False
@@ -484,11 +485,16 @@ def main_terminal_mode(classes: list[Class]) -> None:
 
     input()
 
+TUI_KEY_DOWN  = curses.KEY_DOWN                                         # type: ignore
+TUI_KEY_UP    = curses.KEY_UP                                           # type: ignore
+TUI_KEY_ENTER = (curses.KEY_ENTER, curses.ascii.NL, curses.ascii.CR)    # type: ignore
+
 # TODO: move to class section
 @dataclass
 class CheckboxMenuEntry:
     text: str
     enabled: bool = field(default = False, kw_only = True)
+    rendered_cursor_pos: tuple[int,int] = (-1, -1)
 
 # TODO: move to class section
 @dataclass
@@ -501,12 +507,22 @@ class CheckboxMenu:
 class TuiContext:
     stdscr: curses.window   # type: ignore
 
+    is_running: bool = False
     cursor: tuple[int,int] = (0,0)
-    context_stack: list[Callable[[Self], None]] = field(
+    draw_stack: list[Callable[[Self], None]] = field(
             default_factory = list[Callable[[Self], None]])
     variables: dict[str, Any] = field(default_factory = dict[str, Any])
-    callbacks: dict[int, Callable[[Self], None]] = field(
+    callback_map: dict[int, Callable[[Self], None]] = field(
             default_factory = dict[int, Callable[[Self], None]])
+
+POST_DO_NOTHING = lambda _,__: None
+
+# TODO move to class section
+@dataclass
+class TuiRenderTarget:
+    text_render_fn: Callable[[], Iterable[str]]
+    post_render_fn: Callable[[int, int], None] = POST_DO_NOTHING
+    start_line: int = -1
 
 # TODO move to class section
 @dataclass
@@ -518,10 +534,12 @@ class TuiLayout:
 
     offset_x: int = 0
     offset_y: int = 0
-    items: list[list[str]] = field(
-            default_factory = list[list[str]])
+    items: list[TuiRenderTarget] = field(default_factory = list[TuiRenderTarget])
 
 def init_tui_context(stdscr: curses.window):    # type: ignore
+    # set raw mode
+    curses.raw()    # type: ignore
+
     # clear and refresh on initialisation
     stdscr.clear()
     stdscr.refresh()
@@ -538,14 +556,50 @@ def get_tui_screen_size(tui: TuiContext) -> tuple[int,int]:
     '''Get the maxy,maxx for the TUI'''
     return tui.stdscr.getmaxyx()
 
-def make_tui_int_variable(tui: TuiContext, variable_name: str, initial_value: int) -> bool:
-    '''Create a integer variable in the TUI context
+def make_tui_variable(
+        tui: TuiContext,
+        variable_name: str,
+        initial_value: Any
+        ) -> bool:
+    '''Create a variable with type in the TUI context
 
     Return False if variable already exists'''
     if tui.variables.get(variable_name, None) is not None:
         return False
 
     tui.variables[variable_name] = initial_value
+    return True
+
+def make_tui_int_variable(tui: TuiContext, variable_name: str, initial_value: int) -> bool:
+    '''Create a integer variable in the TUI context
+
+    Return False if variable already exists'''
+    # TODO remove code duplication with make_tui_variable
+    if tui.variables.get(variable_name, None) is not None:
+        return False
+
+    tui.variables[variable_name] = initial_value
+    return True
+
+def get_tui_var(tui: TuiContext, variable_name: str) -> Any:
+    '''Return value of variable in TUI context, or None if variable is unknown'''
+    return tui.variables.get(variable_name, None)
+
+def get_tui_int_variable(tui: TuiContext, variable_name: str) -> Optional[int]:
+    '''Return value of integer variable in TUI context, or None if variable
+    is unknown'''
+    value = tui.variables.get(variable_name, None)
+    return value if isinstance(value, int) else None
+
+def set_tui_int_variable(tui: TuiContext, variable_name: str, value: int) -> bool:
+    '''Set the value of variable in Tui context
+
+    Return False if variable does not exist or is not an integer'''
+    var_val = tui.variables.get(variable_name, None)
+    if not isinstance(var_val, int):
+        return False
+
+    tui.variables[variable_name] = value
     return True
 
 def map_key_callback(
@@ -556,19 +610,30 @@ def map_key_callback(
     '''Map a key to a callback
 
     Return False if mapping already exists'''
-    if tui.callbacks.get(key_code, None) is not None:
+    if tui.callback_map.get(key_code, None) is not None:
         return False
 
-    tui.callbacks[key_code] = callback
+    tui.callback_map[key_code] = callback
     return True
+
+def map_keys_callback(
+        tui: TuiContext,
+        key_codes: Iterable[int],
+        callback: Callable[[TuiContext], None]
+        ) -> bool:
+    '''Attempt to map all provided keys to a callback
+
+    Return False if any mapping fails'''
+    map_fn = lambda k: map_key_callback(tui, k, callback)
+    return all(map_fn(k) for k in key_codes)
 
 def tui_begin_draw(tui: TuiContext):
     '''Prepare TUI context for drawing the next screen state'''
-    tui.context_stack.clear()
+    tui.draw_stack.clear()
 
 def tui_end_draw(tui: TuiContext):
     '''Call drawing callbacks stored in the context'''
-    for draw_call in tui.context_stack:
+    for draw_call in tui.draw_stack:
         draw_call(tui)
 
 def tui_clear_screen(tui: TuiContext):
@@ -580,22 +645,43 @@ def tui_refresh_screen(tui: TuiContext):
     tui.stdscr.refresh()
 
 def clear_screen(tui: TuiContext):
-    '''Draw call for clearing the screen'''
+    '''Draw call for clearing the screen
+
+    Use this between tui_begin_draw and tui_end_draw instead of tui_clear_screen'''
     def draw_call(t: TuiContext):
         tui_clear_screen(t)
 
-    tui.context_stack.append(draw_call)
+    tui.draw_stack.append(draw_call)
 
 def refresh_screen(tui: TuiContext):
-    '''Draw call for refreshing the screen'''
+    '''Draw call for refreshing the screen
+
+    Use this between tui_begin_draw and tui_end_draw instead of tui_refresh_screen'''
     def draw_call(t: TuiContext):
         tui_refresh_screen(t)
 
-    tui.context_stack.append(draw_call)
+    tui.draw_stack.append(draw_call)
 
 def tui_draw_text(tui: TuiContext, text: str, x: int, y: int):
     '''Draw text starting at position on screen'''
     tui.stdscr.addstr(y, x, text)
+
+def tui_move_cursor(tui: TuiContext, x: int, y: int):
+    '''Move cursor to position'''
+    max_y,max_x = tui.stdscr.getmaxyx()
+    if x >= 0 and x <= max_x and y >= 0 and y <= max_y:
+        tui.stdscr.move(y, x)
+
+def tui_mainloop(tui: TuiContext) -> None:
+    tui.is_running = True
+    while tui.is_running:
+        key = tui.stdscr.getch()
+        callback = tui.callback_map.get(key, None)
+        if callback is not None:
+            callback(tui)
+
+def tui_pause(tui: TuiContext) -> None:
+    tui.is_running = False
 
 def make_tui_layout(
         tui: TuiContext, *,
@@ -607,7 +693,7 @@ def make_tui_layout(
     if padding < 0:
         raise ValueError(f"TuiLayout padding must be >= 0: {padding}")
     layout = TuiLayout(tui, centered_x, centered_y, padding)
-    tui.context_stack.append(lambda t: draw_layout(t, layout))
+    tui.draw_stack.append(lambda t: draw_layout(t, layout))
     return layout
 
 def draw_layout(tui: TuiContext, layout: TuiLayout):
@@ -619,11 +705,13 @@ def draw_layout(tui: TuiContext, layout: TuiLayout):
         if item_index != 0 and layout.padding != 0:
             lines.extend(itertools.repeat("", layout.padding))
 
-        max_item_width = max(len(l) for l in item)
+        item.start_line = len(lines)
+        item_text = item.text_render_fn()
+        max_item_width = max(len(l) for l in item_text)
         if max_item_width > max_width:
             max_width = max_item_width
 
-        lines.extend(item)
+        lines.extend(item_text)
 
     width = max_width
     height = len(lines)
@@ -638,29 +726,48 @@ def draw_layout(tui: TuiContext, layout: TuiLayout):
     if width > screen_width:
         width = screen_width
 
-    start_y = (screen_height - height) // 2
-    start_x = (screen_width - width) // 2
+    start_y = (screen_height - height) // 2 if layout.centered_y else 0
+    start_x = (screen_width - width) // 2 if layout.centered_x else 0
+
     for line_index,line in enumerate(lines):
         tui_draw_text(tui, line[:width], start_x, start_y + line_index)
 
+    for item in layout.items:
+        item.post_render_fn(start_x, start_y + item.start_line)
+
 def add_text_to_layout(layout: TuiLayout, text: str):
     '''Add text as item to layout'''
-    layout.items.append([ text ])
+    layout.items.append(TuiRenderTarget(lambda: [ text ]))
 
 def add_checkbox_menu_to_layout(layout: TuiLayout, menu: CheckboxMenu):
     '''Render menu as text for layout item'''
+    entry_button_cursor_pairs: list[tuple[CheckboxMenuEntry, tuple[int, int]]] = []
     lines: list[str] = []
-    lines.append(menu.title)
-    for entry in menu.entries:
-        button = "[X]" if entry.enabled else "[ ]"
-        lines.append(f"{button} {entry.text}")
-    layout.items.append(lines)
+
+    def render() -> list[str]:
+        entry_button_cursor_pairs.clear()
+        lines.clear()
+        lines.append(menu.title)
+        for entry_index, entry in enumerate(menu.entries):
+            button = "[X]" if entry.enabled else "[ ]"
+            lines.append(f"{button} {entry.text}")
+            entry_button_cursor_pairs.append((entry, (1, entry_index + 1)))
+        return lines
+
+    def post_render(x: int, y: int):
+        for entry, cursor in entry_button_cursor_pairs:
+            cursor_x, cursor_y = cursor
+            entry.rendered_cursor_pos = (x + cursor_x, y + cursor_y)
+
+    layout.items.append(TuiRenderTarget(render, post_render))
 
 def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class]) -> list[Category]:
     '''Display TUI screen for selecting categories from classes'''
     # NOTE: this is just first pass code and should be refactored
     title_str = "The following classes are available:"
-    menus: list[CheckboxMenu] = []
+
+    make_tui_variable(tui, "menus", list())
+    menus: list = get_tui_var(tui, "menus")
     for class_index,class_ in enumerate(classes):
         class_id = class_index + 1
         menu = CheckboxMenu(f"{class_id}. {class_.name}")
@@ -670,6 +777,7 @@ def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class])
             # set everything enabled by default
             menu.entries.append(CheckboxMenuEntry(f"{class_id}.{category_id} {category.name}", enabled = True))
 
+    # TODO could use a with block for draw calls
     tui_begin_draw(tui)
     clear_screen(tui)
 
@@ -679,41 +787,109 @@ def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class])
         add_checkbox_menu_to_layout(layout, menu)
 
     refresh_screen(tui)
-
-    #make_tui_int_variable(tui, "selected_class_index", 0)
-    #make_tui_int_variable(tui, "selected_category_index", 0)
-
-    #def on_quit(_):
-    #    raise UserQuit
-
-    #def selection_indices():
-    #    class_index = get_tui_int_variable(tui, "selected_class_index")
-    #    category_index = get_tui_int_variabl(tui, "selected_category_index")
-
-    #def on_down(_):
-    #    ...
-
-    #def on_up(_):
-    #    ...
-
-    #def on_enter(_):
-    #    ...
-
-    #def on_space(_):
-    #    ...
-
-    #map_key_callback(tui, ord('q'), on_quit)
-    #map_key_callback(tui, curses.KEY_DOWN, on_down)     # type: ignore
-    #map_key_callback(tui, curses.KEY_UP, on_up)         # type: ignore
-    #map_key_callback(tui, ord(' '), on_space)
-    #map_key_callback(tui, curses.KEY_ENTER, on_enter)   # type: ignore
-
     tui_end_draw(tui)
 
-    while True:
-        ...
+    make_tui_int_variable(tui, "selected_class_index", 0)
+    make_tui_int_variable(tui, "selected_category_index", 0)
 
-def select_language_screen(languages_keys: list[LanguagesKey]) -> LanguagesKey:
+    def selection_indices(t: TuiContext) -> tuple[int,int]:
+        class_index = get_tui_int_variable(t, "selected_class_index")
+        if class_index is None:
+            raise RuntimeError("TUI variable missing: class_index")
+        category_index = get_tui_int_variable(t, "selected_category_index")
+        if category_index is None:
+            raise RuntimeError("TUI variable missing: class_index")
+        return (class_index,category_index)
+
+    def set_selection(t: TuiContext, selection: tuple[int,int]):
+        class_index, category_index = selection
+        set_tui_int_variable(t, "selected_class_index", class_index)
+        set_tui_int_variable(t, "selected_category_index", category_index)
+
+    def menu_selection_next(menus: list[CheckboxMenu], selection: tuple[int,int]) -> tuple[int,int]:
+        menu_idx,entry_idx = selection
+        if menu_idx < 0 or menu_idx >= len(menus):
+            raise RuntimeError(f"Invalid menu selection state: {menu_idx}")
+
+        current_menu = menus[menu_idx]
+        n_entries = len(current_menu.entries)
+        if menu_idx + 1 >= len(menus) and entry_idx + 1 >= n_entries:
+            return (menu_idx, entry_idx)
+        elif entry_idx + 1 >= n_entries:
+            return (menu_idx + 1, 0)
+        else:
+            return (menu_idx, entry_idx + 1)
+
+    def menu_selection_prev(menus: list[CheckboxMenu], selection: tuple[int,int]) -> tuple[int,int]:
+        menu_idx,entry_idx = selection
+        if menu_idx < 0 or menu_idx >= len(menus):
+            raise RuntimeError(f"Invalid menu selection state: {menu_idx}")
+
+        if menu_idx == 0 and entry_idx == 0:
+            return (menu_idx, entry_idx)
+        elif entry_idx  == 0:
+            new_menu_idx = menu_idx - 1
+            return (new_menu_idx, len(menus[new_menu_idx].entries) - 1)
+        else:
+            return (menu_idx, entry_idx - 1)
+
+    def on_quit(_):
+        raise UserQuit
+
+    def on_down(t: TuiContext):
+        menus: list[CheckboxMenu] = get_tui_var(t, "menus")
+        menu_idx,entry_idx = menu_selection_next(menus, selection_indices(t))
+        set_selection(t, (menu_idx, entry_idx))
+        x,y = menus[menu_idx].entries[entry_idx].rendered_cursor_pos
+        tui_move_cursor(t, x, y)
+
+    def on_up(t: TuiContext):
+        menus: list[CheckboxMenu] = get_tui_var(t, "menus")
+        menu_idx,entry_idx = menu_selection_prev(menus, selection_indices(t))
+        set_selection(t, (menu_idx, entry_idx))
+        x,y = menus[menu_idx].entries[entry_idx].rendered_cursor_pos
+        tui_move_cursor(t, x, y)
+
+    def on_enter(t: TuiContext):
+        tui_pause(t)
+
+    def on_space(t: TuiContext):
+        menus: list[CheckboxMenu] = get_tui_var(t, "menus")
+        menu_idx, entry_idx = selection_indices(t)
+        selected_entry = menus[menu_idx].entries[entry_idx]
+        selected_entry.enabled = not selected_entry.enabled
+
+        tui_end_draw(t)
+        tui_move_cursor(t, *selected_entry.rendered_cursor_pos)
+
+    map_key_callback(tui, ord('q'), on_quit)
+    map_key_callback(tui, TUI_KEY_DOWN, on_down)
+    map_key_callback(tui, TUI_KEY_UP, on_up)
+    map_key_callback(tui, ord(' '), on_space)
+    map_keys_callback(tui, TUI_KEY_ENTER, on_enter)
+
+    start_x, start_y = menus[0].entries[0].rendered_cursor_pos
+    tui_move_cursor(tui, start_x, start_y)
+
+    tui_mainloop(tui)
+
+    # filter classes and categories by menu entry
+    categories: list[Category] = []
+    for menu_index,menu in enumerate(menus):
+        if not isinstance(menu, CheckboxMenu):
+            continue
+
+        for entry_index,entry in enumerate(menu.entries):
+            if entry.enabled:
+                categories.append(classes[menu_index].categories[entry_index])
+
+    return categories
+
+def select_language_screen(
+        tui: TuiContext,
+        languages_keys: list[LanguagesKey]
+        ) -> LanguagesKey:
+    '''Display menu for selecting languages from list'''
     ...
 
 def configure_session_tui(tui: TuiContext, classes: list[Class]) -> PracticeSession:
@@ -721,7 +897,10 @@ def configure_session_tui(tui: TuiContext, classes: list[Class]) -> PracticeSess
     # NOTE: this is just first pass code and should be refactored
     categories = select_categories_from_classes_screen(tui, classes)
     dictionary = make_language_dictionary(categories)
-    languages = select_language_screen(list(dictionary.keys()))
+    # TODO remove testing code
+    tui_draw_text(tui, f"{dictionary!r}", 0, 0)
+    tui_mainloop(tui)
+    languages = select_language_screen(tui, list(dictionary.keys()))
     return PracticeSession(categories, languages, dictionary[languages])
 
 def play_memorize_game_tui(session: PracticeSession) -> None:
