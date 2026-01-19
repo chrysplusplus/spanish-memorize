@@ -3,7 +3,7 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Callable, Optional, Any, Iterable, Self
+from typing import Callable, Optional, Any, Iterable, Self, TypeVar
 
 import itertools
 import json
@@ -68,7 +68,9 @@ MINIMUM_STREAK_DISPLAY = 5
 DEFAULT_NUMBER_OF_ROUNDS = 10
 RECENT_WORDS_COUNT = 10
 
-def filter_exists[T](iterable: Iterable[T | None]) -> Iterable[T]:
+T = TypeVar('T')
+
+def filter_exists(iterable: Iterable[T | None]) -> Iterable[T]:
     return (o for o in iterable if o is not None)
 
 def json_to_str(json_str: Any) -> Optional[str]:
@@ -246,7 +248,7 @@ def vocab_entry_to_dictionary_entry(entry: CategoryEntry) -> DictionaryEntry:
     else:
         raise VocabularyParsingError(f"Vocab entry is structured incorrectly: {data=}")
 
-type LanguagesKey = tuple[str,str]
+LanguagesKey = tuple[str,str]
 
 def make_language_dictionary(categories: list[Category]) -> dict[LanguagesKey, dict[str, list[str]]]:
     '''Create language dictionary for practice session'''
