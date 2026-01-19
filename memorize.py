@@ -3,7 +3,7 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Callable, Optional, Any, Iterable, Self, TypeVar
+from typing import Callable, Optional, Any, Iterable, Self, TypeVar, Sequence
 
 import itertools
 import json
@@ -487,9 +487,44 @@ def main_terminal_mode(classes: list[Class]) -> None:
 
     input()
 
-TUI_KEY_DOWN  = curses.KEY_DOWN                                         # type: ignore
-TUI_KEY_UP    = curses.KEY_UP                                           # type: ignore
-TUI_KEY_ENTER = (curses.KEY_ENTER, curses.ascii.NL, curses.ascii.CR)    # type: ignore
+# ==============================================================================
+# TUI SECTION
+# ==============================================================================
+
+TUI_KEY_DOWN  = (curses.KEY_DOWN,)  # type: ignore
+TUI_KEY_UP    = (curses.KEY_UP,)    # type: ignore
+TUI_KEY_ENTER = (
+        (curses.KEY_ENTER,),        # type: ignore
+        (curses.ascii.NL,),         # type: ignore
+        (curses.ascii.CR,)          # type: ignore
+        )
+
+TUI_KEY_EVENT = ""
+
+def validate_keystr(key_str: str) -> str:
+    '''Trim and validate key representation
+
+    Raise ValueError if key representation is invalid'''
+    key_str = key_str.lower()
+    if len(key_str) == 0 or not key_str.isprintable():
+        raise ValueError(f"Invalid key character: {key_str}")
+    return key_str[0]
+
+TuiKey = tuple[int, ...]
+
+def as_key(key_str: str) -> TuiKey:
+    '''Convert string representing keyboard character to key code
+
+    Raise ValueError if key representation is invalid'''
+    return (ord(validate_keystr(key_str)),)
+
+def as_ctrl_key(key_str: str) -> TuiKey:
+    '''Convert string to control key code
+
+    For example: as_ctrl_key('c') would yield the key code for Ctrl-C
+
+    Raise ValueError if key representation is invalid'''
+    return (curses.ascii.ctrl(ord(validate_keystr(key_str))),)   # type: ignore
 
 # TODO: move to class section
 @dataclass
@@ -504,18 +539,38 @@ class CheckboxMenu:
     title: str
     entries: list[CheckboxMenuEntry] = field(default_factory = list[CheckboxMenuEntry])
 
+@dataclass
+class MenuEntry:
+    text: str
+    rendered_cursor_pos: tuple[int,int] = (-1, -1)
+
+@dataclass
+class Menu:
+    title: str
+    entries: list[MenuEntry] = field(default_factory= list[MenuEntry])
+    selected_index: int = -1
+
 # TODO move to class section
 @dataclass
 class TuiContext:
     stdscr: curses.window   # type: ignore
 
+    # TODO change to non dataclass
     is_running: bool = False
     cursor: tuple[int,int] = (0,0)
     draw_stack: list[Callable[[Self], None]] = field(
             default_factory = list[Callable[[Self], None]])
     variables: dict[str, Any] = field(default_factory = dict[str, Any])
-    callback_map: dict[int, Callable[[Self], None]] = field(
-            default_factory = dict[int, Callable[[Self], None]])
+    callbacks: dict[str, list[Callable[[Self, TuiKey], bool]]] = field(
+            default_factory = dict[str, list[Callable[[Self, TuiKey], bool]]])
+    event_queue: list[str] = field(default_factory = list[str])
+
+@dataclass
+class TuiAcceleratorMap:
+    tui: TuiContext
+    handler: Callable[[TuiContext, TuiKey], bool]
+    key_map: dict[TuiKey, Callable[[TuiContext], None]] = field(
+            default_factory = dict[TuiKey, Callable[[TuiContext], None]])
 
 POST_DO_NOTHING = lambda _,__: None
 
@@ -538,9 +593,16 @@ class TuiLayout:
     offset_y: int = 0
     items: list[TuiRenderTarget] = field(default_factory = list[TuiRenderTarget])
 
-def init_tui_context(stdscr: curses.window):    # type: ignore
+def init_tui_context(stdscr: curses.window) -> TuiContext:  # type: ignore
+    '''Initialise TUI and return context object'''
     # set raw mode
     curses.raw()    # type: ignore
+
+    # set nodelay mode
+    stdscr.nodelay(True)
+
+    # use default colours
+    curses.use_default_colors() # type: ignore
 
     # clear and refresh on initialisation
     stdscr.clear()
@@ -587,6 +649,13 @@ def get_tui_var(tui: TuiContext, variable_name: str) -> Any:
     '''Return value of variable in TUI context, or None if variable is unknown'''
     return tui.variables.get(variable_name, None)
 
+def destroy_tui_variable(tui: TuiContext, variable_name: str) -> None:
+    '''Remove variable from TUI context
+
+    If variable is not known to the context, fail silently'''
+    if variable_name in tui.variables.keys():
+        del tui.variables[variable_name]
+
 def get_tui_int_variable(tui: TuiContext, variable_name: str) -> Optional[int]:
     '''Return value of integer variable in TUI context, or None if variable
     is unknown'''
@@ -604,49 +673,59 @@ def set_tui_int_variable(tui: TuiContext, variable_name: str, value: int) -> boo
     tui.variables[variable_name] = value
     return True
 
-def map_key_callback(
+def tui_add_callback(
         tui: TuiContext,
-        key_code: int,
-        callback: Callable[[TuiContext], None]
+        event_type: str,
+        callback: Callable[[TuiContext, TuiKey], bool]
         ) -> bool:
-    '''Map a key to a callback
+    '''Add callback for handling the specified event type
 
-    Return False if mapping already exists'''
-    if tui.callback_map.get(key_code, None) is not None:
-        return False
+    If succcessful, callback is added at the top of the stack and so will be
+    called before the previous items in the stack during the event callback
+    stage
 
-    tui.callback_map[key_code] = callback
+    callback should be a callable that accepts a TuiContext and an int as its
+    parameters, which represent the current TUI context and the key input that
+    triggered the current event respectively, and returns a bool, which if True
+    indicates that the next event callback should be used. It is generally
+    recommended to return True from the callback.
+
+    Return False if callback was previously added for this event type'''
+    callback_stack = tui.callbacks.get(event_type, None)
+    if callback_stack is None:
+        callback_stack = [ callback ]
+        tui.callbacks[event_type] = callback_stack
+        return True
+
+    for known_callback in callback_stack:
+        if id(known_callback) == id(callback):
+            return False
+
+    callback_stack.insert(0, callback)
     return True
 
-def map_keys_callback(
-        tui: TuiContext,
-        key_codes: Iterable[int],
-        callback: Callable[[TuiContext], None]
-        ) -> bool:
-    '''Attempt to map all provided keys to a callback
-
-    Return False if any mapping fails'''
-    map_fn = lambda k: map_key_callback(tui, k, callback)
-    return all(map_fn(k) for k in key_codes)
-
-def tui_begin_draw(tui: TuiContext):
+def tui_begin_draw(tui: TuiContext) -> None:
     '''Prepare TUI context for drawing the next screen state'''
     tui.draw_stack.clear()
 
-def tui_end_draw(tui: TuiContext):
+def tui_end_draw(tui: TuiContext) -> None:
     '''Call drawing callbacks stored in the context'''
     for draw_call in tui.draw_stack:
         draw_call(tui)
 
-def tui_clear_screen(tui: TuiContext):
+def tui_redraw(tui: TuiContext) -> None:
+    '''Redraw the screen using the previous drawing callbacks'''
+    tui_end_draw(tui)
+
+def tui_clear_screen(tui: TuiContext) -> None:
     '''Clear the TUI'''
     tui.stdscr.clear()
 
-def tui_refresh_screen(tui: TuiContext):
+def tui_refresh_screen(tui: TuiContext) -> None:
     '''Refresh the TUI'''
     tui.stdscr.refresh()
 
-def clear_screen(tui: TuiContext):
+def clear_screen(tui: TuiContext) -> None:
     '''Draw call for clearing the screen
 
     Use this between tui_begin_draw and tui_end_draw instead of tui_clear_screen'''
@@ -655,7 +734,7 @@ def clear_screen(tui: TuiContext):
 
     tui.draw_stack.append(draw_call)
 
-def refresh_screen(tui: TuiContext):
+def refresh_screen(tui: TuiContext) -> None:
     '''Draw call for refreshing the screen
 
     Use this between tui_begin_draw and tui_end_draw instead of tui_refresh_screen'''
@@ -674,16 +753,98 @@ def tui_move_cursor(tui: TuiContext, x: int, y: int):
     if x >= 0 and x <= max_x and y >= 0 and y <= max_y:
         tui.stdscr.move(y, x)
 
+TuiEventCallbackStack = list[Callable[[TuiContext, TuiKey], bool]]
+
+def _tui_process_event_callback(t: TuiContext, k: TuiKey, s: TuiEventCallbackStack) -> None:
+    '''Process event callback'''
+    for callback in s:
+        do_next = callback(t, k)
+        if not do_next:
+            break
+
+def _tui_process_event_queue(t: TuiContext, k: TuiKey) -> None:
+    '''Process event queue'''
+    while len(t.event_queue) != -0:
+        event_type = t.event_queue.pop(0)
+        callback_stack = t.callbacks.get(event_type, None)
+        if callback_stack is None:
+            continue
+        _tui_process_event_callback(t, k, callback_stack)
+
+def _tui_get_key(t: TuiContext) -> TuiKey:
+    '''Get key from typeahead'''
+    key_bytes: list[int] = []
+    key = t.stdscr.getch()
+    while key != -1:
+        key_bytes.append(key)
+        key = t.stdscr.getch()
+
+    return tuple(key_bytes)
+
 def tui_mainloop(tui: TuiContext) -> None:
+    '''Run main loop for handling user input'''
     tui.is_running = True
     while tui.is_running:
-        key = tui.stdscr.getch()
-        callback = tui.callback_map.get(key, None)
-        if callback is not None:
-            callback(tui)
+        key = _tui_get_key(tui)
+        if len(key) != 0:
+            tui.event_queue.append(TUI_KEY_EVENT)
+        _tui_process_event_queue(tui, key)
 
 def tui_pause(tui: TuiContext) -> None:
+    '''Return control back to program code until next mainloop'''
     tui.is_running = False
+
+def tui_add_accelerator_map(tui: TuiContext) -> TuiAcceleratorMap:
+    '''Add an accelerator map for creating a layer to process key inputs'''
+    key_map: dict[TuiKey, Callable[[TuiContext], None]] = {}
+
+    def handler(t: TuiContext, key: TuiKey) -> bool:
+        callback = key_map.get(key, None)
+        if callback is not None:
+            callback(t)
+            return False    # prevent further propagation which might be unexpected
+
+        return True
+
+    tui_add_callback(tui, TUI_KEY_EVENT, handler)
+    return TuiAcceleratorMap(tui, handler, key_map)
+
+def tui_destroy_accelerator_map(tui: TuiContext, accel_map: TuiAcceleratorMap) -> None:
+    '''Remove the accelerator map from the TUI context
+
+    If accel_map is not a known callback for TUI_KEY_EVENT, then fail silently'''
+    callback_stack = tui.callbacks.get(TUI_KEY_EVENT, None)
+    if callback_stack is None:
+        return
+
+    callback = accel_map.handler
+    if callback in callback_stack:
+        callback_stack.remove(callback)
+
+def map_key_callback(
+        accel_map: TuiAcceleratorMap,
+        key_code: TuiKey,
+        callback: Callable[[TuiContext], None]
+        ) -> bool:
+    '''Map a key to a callback
+
+    Return False if mapping already exists'''
+    if accel_map.key_map.get(key_code, None) is not None:
+        return False
+
+    accel_map.key_map[key_code] = callback
+    return True
+
+def map_keys_callback(
+        accel_map: TuiAcceleratorMap,
+        key_codes: Iterable[TuiKey],
+        callback: Callable[[TuiContext], None]
+        ) -> bool:
+    '''Attempt to map all provided keys to a callback
+
+    Return False if any mapping fails'''
+    map_fn = lambda k: map_key_callback(accel_map, k, callback)
+    return all(map_fn(k) for k in key_codes)
 
 def make_tui_layout(
         tui: TuiContext, *,
@@ -763,6 +924,30 @@ def add_checkbox_menu_to_layout(layout: TuiLayout, menu: CheckboxMenu):
 
     layout.items.append(TuiRenderTarget(render, post_render))
 
+def add_menu_to_layout(layout: TuiLayout, menu: Menu) -> None:
+    '''Define draw calls to render the menu'''
+    entry_button_cursor_pairs: list[tuple[MenuEntry, tuple[int,int]]] = []
+
+    def render() -> list[str]:
+        entry_button_cursor_pairs.clear()
+        lines: list[str] = []
+        lines.append(menu.title)
+        for entry_index, entry in enumerate(menu.entries):
+            lines.append(f"  {entry.text}")
+            entry_button_cursor_pairs.append((entry, (0, entry_index + 1)))
+        return lines
+
+    def post_render(x: int, y: int):
+        for entry, cursor in entry_button_cursor_pairs:
+            cursor_x, cursor_y = cursor
+            entry.rendered_cursor_pos = (x + cursor_x, y + cursor_y)
+
+    layout.items.append(TuiRenderTarget(render, post_render))
+
+def on_quit(_):
+    '''Event handler for quitting the program'''
+    raise UserQuit
+
 def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class]) -> list[Category]:
     '''Display TUI screen for selecting categories from classes'''
     # NOTE: this is just first pass code and should be refactored
@@ -835,9 +1020,6 @@ def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class])
         else:
             return (menu_idx, entry_idx - 1)
 
-    def on_quit(_):
-        raise UserQuit
-
     def on_down(t: TuiContext):
         menus: list[CheckboxMenu] = get_tui_var(t, "menus")
         menu_idx,entry_idx = menu_selection_next(menus, selection_indices(t))
@@ -861,14 +1043,15 @@ def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class])
         selected_entry = menus[menu_idx].entries[entry_idx]
         selected_entry.enabled = not selected_entry.enabled
 
-        tui_end_draw(t)
+        tui_redraw(t)
         tui_move_cursor(t, *selected_entry.rendered_cursor_pos)
 
-    map_key_callback(tui, ord('q'), on_quit)
-    map_key_callback(tui, TUI_KEY_DOWN, on_down)
-    map_key_callback(tui, TUI_KEY_UP, on_up)
-    map_key_callback(tui, ord(' '), on_space)
-    map_keys_callback(tui, TUI_KEY_ENTER, on_enter)
+    accel_map = tui_add_accelerator_map(tui)
+    map_key_callback(accel_map, TUI_KEY_DOWN, on_down)
+    map_key_callback(accel_map, TUI_KEY_UP, on_up)
+    map_key_callback(accel_map, as_key(' '), on_space)
+    map_keys_callback(accel_map, TUI_KEY_ENTER, on_enter)
+    map_key_callback(accel_map, as_key('q'), on_quit)
 
     start_x, start_y = menus[0].entries[0].rendered_cursor_pos
     tui_move_cursor(tui, start_x, start_y)
@@ -885,38 +1068,197 @@ def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class])
             if entry.enabled:
                 categories.append(classes[menu_index].categories[entry_index])
 
+    destroy_tui_variable(tui, "menus")
+    destroy_tui_variable(tui, "selected_class_index")
+    destroy_tui_variable(tui, "selected_category_index")
+    tui_destroy_accelerator_map(tui, accel_map)
     return categories
+
+def display_selection_menu(
+        tui: TuiContext,
+        items: Sequence[T],
+        title: str,
+        *,
+        item_display_fn: Callable[[T], str] = str
+        ) -> T:
+    '''Display generic selection menu for selecting an item from a list'''
+    # NOTE: this is just first pass code and should be refactored
+    make_tui_variable(tui, "menu", Menu(title))
+    menu: Menu = get_tui_var(tui, "menu")
+    for item in items:
+        menu.entries.append(MenuEntry(item_display_fn(item)))
+
+    tui_begin_draw(tui)
+    clear_screen(tui)
+    layout = make_tui_layout(tui, centered_x = True, centered_y = True, padding = 1)
+    add_menu_to_layout(layout, menu)
+    refresh_screen(tui)
+    tui_end_draw(tui)
+
+    menu.selected_index = 0
+
+    def menu_get_bounded_selection(menu: Menu, index: int) -> int:
+        index = max(0, index)
+        index = min(len(menu.entries) - 1, index)
+        return index
+
+    def on_down(t: TuiContext):
+        menu: Menu = get_tui_var(t, "menu")
+        index = menu_get_bounded_selection(menu, menu.selected_index + 1)
+        tui_move_cursor(t, *menu.entries[index].rendered_cursor_pos)
+        menu.selected_index = index
+
+    def on_up(t: TuiContext):
+        menu: Menu = get_tui_var(t, "menu")
+        index = menu_get_bounded_selection(menu, menu.selected_index - 1)
+        tui_move_cursor(t, *menu.entries[index].rendered_cursor_pos)
+        menu.selected_index = index
+
+    def on_enter(t: TuiContext):
+        tui_pause(t)
+
+    accel_map = tui_add_accelerator_map(tui)
+    map_key_callback(accel_map, TUI_KEY_DOWN, on_down)
+    map_key_callback(accel_map, TUI_KEY_UP, on_up)
+    map_keys_callback(accel_map, TUI_KEY_ENTER, on_enter)
+    map_key_callback(accel_map, as_key('q'), on_quit)
+
+    tui_move_cursor(tui, *menu.entries[0].rendered_cursor_pos)
+    tui_mainloop(tui)
+
+    choice = menu.selected_index
+
+    destroy_tui_variable(tui, "menu")
+    tui_destroy_accelerator_map(tui, accel_map)
+    return items[choice]
 
 def select_language_screen(
         tui: TuiContext,
         languages_keys: list[LanguagesKey]
         ) -> LanguagesKey:
     '''Display menu for selecting languages from list'''
-    ...
+    # NOTE: this is just first pass code and should be refactored
+    if len(languages_keys) == 1:
+        # TODO: notify the user?
+        return languages_keys[0]
+
+    def display_languages_key(key: LanguagesKey) -> str:
+        return f"{key[1]} -> {key[0]}"
+
+    menu_title = "Select a language pair:"
+    return display_selection_menu(tui, languages_keys, menu_title,
+                                  item_display_fn = display_languages_key)
 
 def configure_session_tui(tui: TuiContext, classes: list[Class]) -> PracticeSession:
     '''Configure the practice session with TUI controls'''
     # NOTE: this is just first pass code and should be refactored
     categories = select_categories_from_classes_screen(tui, classes)
     dictionary = make_language_dictionary(categories)
-    # TODO remove testing code
-    tui_draw_text(tui, f"{dictionary!r}", 0, 0)
-    tui_mainloop(tui)
+    if len(dictionary.keys()) == 0:
+        # TODO: handle empty dictionary
+        raise NotImplementedError
+
     languages = select_language_screen(tui, list(dictionary.keys()))
     return PracticeSession(categories, languages, dictionary[languages])
 
-def play_memorize_game_tui(session: PracticeSession) -> None:
-    ...
+def ask_rounds_tui(tui: TuiContext) -> int:
+    '''Ask user how many rounds they want to play'''
+    selection = (5, 10, 20, 50)
+    menu_title = "How many rounds?"
+    display = lambda n: f"{n} rounds"
+    return display_selection_menu(tui, selection, menu_title, item_display_fn=display)
+
+def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
+    '''Play round of Memorize in TUI mode'''
+    # NOTE: this is just first pass code and should be refactored
+    word = get_random_word(session)
+    answers = session.dictionary[word]
+
+    make_tui_int_variable(tui, "guesses_left", 3)
+    guesses_left = get_tui_int_variable(tui, "guesses_left")
+    display_guesses = lambda g: f"{g} guesses" if g > 1 else "1 guess"
+
+    session.total_tests += 1
+
+    tui_begin_draw(tui)
+    clear_screen(tui)
+
+    layout = make_tui_layout(tui, centered_x=True, centered_y=True)
+    add_text_to_layout(layout, f"Test #{session.total_tests}")
+    if session.streak > MINIMUM_STREAK_DISPLAY:
+        add_text_to_layout(layout, f"Streak: {session.streak}")
+
+    add_text_to_layout(layout, "")
+    add_text_to_layout(layout, "Your word is:")
+    add_text_to_layout(layout, "")
+    add_text_to_layout(layout, word)
+    add_text_to_layout(layout, "")
+    add_text_to_layout(layout, "<answer line 1>")
+    add_text_to_layout(layout, "")
+    add_text_to_layout(layout, "<answer line 2>")
+    add_text_to_layout(layout, "")
+    add_text_to_layout(layout, "<feedback line>")
+
+    refresh_screen(tui)
+    tui_end_draw(tui)
+
+    # set initial state
+    # cursor = ...
+    make_tui_variable(tui, "response", "")
+
+    def on_entry_key_press(t: TuiContext, k: TuiKey) -> bool:
+        pass
+
+    def on_text_changed(t: TuiContext, _) -> bool:
+        pass
+
+    def on_enter(t: TuiContext):
+        ...
+
+    def on_finish(t: TuiContext, _) -> bool:
+        pass
+
+    accel_map = tui_add_accelerator_map(tui)
+    map_keys_callback(accel_map, TUI_KEY_ENTER, on_enter)
+    #tui_add_callback(tui, TUI_KEY_EVENT, on_entry_key_press)
+
+    tui_mainloop(tui)
+
+    destroy_tui_variable(tui, "guesses_left")
+    destroy_tui_variable(tui, "response")
+    tui_destroy_accelerator_map(tui, accel_map)
+
+def ask_more_rounds_tui(tui: TuiContext) -> int:
+    '''Ask user if they want more rounds'''
+    selection = (0, 5, 10, 20, 50)
+    menu_title = "How many rounds?"
+    display = lambda n: f"{n} rounds" if n != 0 else "Finish"
+    return display_selection_menu(tui, selection, menu_title, item_display_fn=display)
+
+def play_memorize_game_tui(tui: TuiContext, session: PracticeSession) -> None:
+    '''Play Memorize game in TUI mode'''
+    rounds_left = ask_rounds_tui(tui)
+    while rounds_left > 0:
+        play_memorize_round_tui(tui, session)
+        rounds_left -= 1
+
+        if rounds_left == 0:
+            rounds_left = ask_more_rounds_tui(tui)
 
 def display_summary_screen(session: PracticeSession) -> None:
     ...
 
 def main_tui_mode(stdscr: curses.window, classes: list[Class]) -> None: # type: ignore
     tui = init_tui_context(stdscr)
+    accel_map = tui_add_accelerator_map(tui)
+    map_key_callback(accel_map, as_ctrl_key('c'), on_quit)
     try:
         session = configure_session_tui(tui, classes)
-        play_memorize_game_tui(session)
+        play_memorize_game_tui(tui, session)
         display_summary_screen(session)
+        # TODO remove testing code
+        tui_draw_text(tui, f"{session=}", 0, 0)
+        tui_mainloop(tui)
 
     except UserQuit:
         return
