@@ -1134,10 +1134,12 @@ def display_selection_menu(
         items: Sequence[T],
         title: str,
         *,
-        item_display_fn: Callable[[T], str] = str
+        item_display_fn: Callable[[T], str] = str,
+        start_index: int = 0
         ) -> T:
     '''Display generic selection menu for selecting an item from a list'''
     # NOTE: this is just first pass code and should be refactored
+    if start_index >= len(items): raise ValueError(f"Index out of bounds: {start_index}")
     make_tui_variable(tui, "menu", Menu(title))
     menu: Menu = get_tui_var(tui, "menu")
     for item in items:
@@ -1150,7 +1152,7 @@ def display_selection_menu(
     refresh_screen(tui)
     tui_end_draw(tui)
 
-    menu.selected_index = 0
+    menu.selected_index = start_index
 
     def menu_get_bounded_selection(menu: Menu, index: int) -> int:
         index = max(0, index)
@@ -1178,7 +1180,7 @@ def display_selection_menu(
     map_keys_callback(accel_map, TUI_KEY_ENTER, on_enter)
     map_key_callback(accel_map, as_key('q'), on_quit)
 
-    tui_move_cursor(tui, *menu.entries[0].rendered_cursor_pos)
+    tui_move_cursor(tui, *menu.entries[menu.selected_index].rendered_cursor_pos)
     tui_mainloop(tui)
 
     choice = menu.selected_index
@@ -1221,7 +1223,8 @@ def ask_rounds_tui(tui: TuiContext) -> int:
     selection = (5, 10, 20, 50)
     menu_title = "How many rounds?"
     display = lambda n: f"{n} rounds"
-    return display_selection_menu(tui, selection, menu_title, item_display_fn=display)
+    return display_selection_menu(
+            tui, selection, menu_title, item_display_fn=display, start_index=1)
 
 def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     '''Play round of Memorize in TUI mode'''
@@ -1233,7 +1236,8 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     # define screen states
     GUESSING           = 0
     WAITING_TO_RETRY   = 1
-    WAITING_TO_FINISH  = 2
+    WORD_GUESSED       = 2
+    WORD_MISSED        = 3
 
     # initialise tui variables
     make_tui_int_variable(tui, "guesses_left", 3)
@@ -1241,8 +1245,18 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     if guesses_left is None:
         raise RuntimeError("Variable could not be set: guesses_left")
 
-    display_guesses = lambda g: f"{g} guesses" if g > 1 else "1 guess"
+    display_guesses = lambda g: f"{g} guesses" if g > 1 \
+            else "1 guess" if g == 1 \
+            else "no guesses"
 
+    # Technically this behaves differently than the old terminal mode
+    # but this is actually the behaviour I intended
+    display_title = lambda session: \
+            f"Test #{session.total_tests}" \
+            if session.streak < MINIMUM_STREAK_DISPLAY \
+            else f"Test #{session.total_tests} | Streak: {session.streak}"
+
+    make_tui_variable(tui, "title", display_title(session))
     make_tui_variable(tui, "answer_prompt", f"Answer ({display_guesses(guesses_left)} left):")
     make_tui_variable(tui, "answer_response", "")
     make_tui_variable(tui, "feedback_1", "")
@@ -1254,10 +1268,7 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     clear_screen(tui)
 
     layout = make_tui_layout(tui, centered_x=True, centered_y=True, min_width = 50)
-    add_text_to_layout(layout, f"Test #{session.total_tests}")
-    if session.streak > MINIMUM_STREAK_DISPLAY:
-        add_text_to_layout(layout, f"Streak: {session.streak}")
-
+    add_eval_to_layout(layout, lambda: get_tui_var(tui, "title"))
     add_text_to_layout(layout, "")
     add_text_to_layout(layout, "Your word is:")
     add_text_to_layout(layout, word)
@@ -1309,47 +1320,67 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
         return True
 
     def on_enter(t: TuiContext):
+        response: str = get_tui_var(t, "answer_response")
+        if len(response) == 0 : return
+
         state = get_tui_int_variable(t, "state")
         if state == GUESSING:            tui_emit(t, "submit")
         elif state == WAITING_TO_RETRY:  tui_emit(t, "retry")
-        elif state == WAITING_TO_FINISH: tui_emit(t, "finish")
+        elif state == WORD_GUESSED:      tui_emit(t, "finish")
+        elif state == WORD_MISSED:       tui_emit(t, "finish")
         else: raise RuntimeError(f"Unknown state in play_memorize_round_tui: {state}")
 
-    def on_submit(t: TuiContext, _) -> bool:
-        response: str = get_tui_var(t, "answer_response")
-        if response.lower().strip() in answers:
-            session.streak += 1
-            set_tui_variable(t, "feedback_1", f"{congratulation()}")
-            if len(answers) > 1:
-                other_answers = (answer for answer in answers if answer != response)
-                set_tui_variable(
-                        t,
-                        "feedback_2",
-                        f"Other answers could have been {' or '.join(other_answers)}")
+    def correct(t: TuiContext, response: str):
+        session.streak += 1
+        set_tui_variable(t, "feedback_1", f"{congratulation()}")
+        if len(answers) > 1:
+            other_answers = (answer for answer in answers if answer != response)
+            set_tui_variable(
+                    t,
+                    "feedback_2",
+                    f"Other answers could have been {' or '.join(other_answers)}")
 
-            set_tui_int_variable(t, "state", WAITING_TO_FINISH)
+        set_tui_int_variable(t, "state", WORD_GUESSED)
+        tui_redraw(t)
+        move_cursor_to_entry(t)
+
+    def wrong(t: TuiContext, _):
+        old_streak = session.streak
+        session.streak = 0
+        if old_streak >= MINIMUM_STREAK_DISPLAY:
+            set_tui_variable(t, "title", f"{display_title(session)} | Streak of {old_streak} lost...")
+
+        guesses_left = get_tui_int_variable(t, "guesses_left")
+        if guesses_left is None:
+            raise RuntimeError("Variable missing: guesses_left")
+
+        guesses_left -= 1
+        if guesses_left == 0:
+            set_tui_variable(t, "answer_prompt", f"Answer ({display_guesses(guesses_left)} left):")
+            set_tui_variable(t, "feedback_1", f"{comiseration()}")
+            set_tui_variable(
+                    t, "feedback_2",
+                    f"The correct answer was {answers[0]}"
+                    if len(answers) == 1
+                    else f"The correct answers were {' or '.join(answers)}")
+            set_tui_int_variable(t, "state", WORD_MISSED)
             tui_redraw(t)
             move_cursor_to_entry(t)
 
         else:
+            set_tui_variable(t, "answer_prompt", f"Answer ({display_guesses(guesses_left)} left):")
             set_tui_variable(t, "feedback_1", "Incorrect")
             set_tui_variable(t, "feedback_2", "Prese Enter to retry...")
-
-            session.streak = 0
-            guesses_left = get_tui_int_variable(t, "guesses_left")
-            if guesses_left is None:
-                raise RuntimeError("Variable missing: guesses_left")
-
-            guesses_left -= 1
-            if guesses_left == 0:
-                tui_emit(t, "finish")
-
             set_tui_int_variable(t, "guesses_left", guesses_left)
-            set_tui_variable(t, "answer_prompt", f"Answer ({display_guesses(guesses_left)} left):")
-            set_tui_int_variable(t, "state", WAITING_TO_RETRY)
             tui_redraw(t)
             move_cursor_to_entry(t)
 
+            set_tui_int_variable(t, "state", WAITING_TO_RETRY)
+
+    def on_submit(t: TuiContext, _) -> bool:
+        response: str = get_tui_var(t, "answer_response")
+        if response.lower().strip() in answers: correct(t, response)
+        else: wrong(t, response)
         return True
 
     def on_retry(t: TuiContext, _) -> bool:
@@ -1364,6 +1395,12 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
         return True
 
     def on_finish(t: TuiContext, _) -> bool:
+        state = get_tui_int_variable(t, "state")
+        if state is None:
+            raise RuntimeError("Variable missing: state")
+        elif state == WORD_MISSED and word not in session.missed_words:
+            session.missed_words.append(word)
+
         tui_pause(t)
         return True
 
@@ -1380,6 +1417,7 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
 
     # cleanup
     destroy_tui_variable(tui, "guesses_left")
+    destroy_tui_variable(tui, "title")
     destroy_tui_variable(tui, "answer_prompt")
     destroy_tui_variable(tui, "answer_response")
     destroy_tui_variable(tui, "feedback_1")
@@ -1459,6 +1497,7 @@ def main():
     program_args = argparser.parse_args()
     classes = load_classes()
     if not USE_CURSES or program_args.no_curses:
+        print("Using terminal mode -- some features may be missing")
         main_terminal_mode(classes)
 
     else:
