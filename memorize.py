@@ -491,13 +491,14 @@ def main_terminal_mode(classes: list[Class]) -> None:
 # TUI SECTION
 # ==============================================================================
 
-TUI_KEY_DOWN  = (curses.KEY_DOWN,)  # type: ignore
-TUI_KEY_UP    = (curses.KEY_UP,)    # type: ignore
-TUI_KEY_ENTER = (
-        (curses.KEY_ENTER,),        # type: ignore
-        (curses.ascii.NL,),         # type: ignore
-        (curses.ascii.CR,)          # type: ignore
+TUI_KEY_DOWN      = (curses.KEY_DOWN,)      # type: ignore
+TUI_KEY_UP        = (curses.KEY_UP,)        # type: ignore
+TUI_KEY_ENTER     = (
+        (curses.KEY_ENTER,),                # type: ignore
+        (curses.ascii.NL,),                 # type: ignore
+        (curses.ascii.CR,)                  # type: ignore
         )
+TUI_KEY_BACKSPACE = (curses.KEY_BACKSPACE,) # type: ignore
 
 TUI_KEY_EVENT = ""
 
@@ -525,6 +526,13 @@ def as_ctrl_key(key_str: str) -> TuiKey:
 
     Raise ValueError if key representation is invalid'''
     return (curses.ascii.ctrl(ord(validate_keystr(key_str))),)   # type: ignore
+
+def key_to_str(key: TuiKey) -> str:
+    '''Convert TuiKey to printable string'''
+    if len(key) == 1:
+        return curses.keyname(key[0]).decode("utf-8")   # type: ignore
+    else:
+        return bytes(key).decode("utf-8")
 
 # TODO: move to class section
 @dataclass
@@ -579,7 +587,8 @@ POST_DO_NOTHING = lambda _,__: None
 class TuiRenderTarget:
     text_render_fn: Callable[[], Iterable[str]]
     post_render_fn: Callable[[int, int], None] = POST_DO_NOTHING
-    start_line: int = -1
+    start_x: int = -1
+    start_y: int = -1
 
 # TODO move to class section
 @dataclass
@@ -648,6 +657,22 @@ def make_tui_int_variable(tui: TuiContext, variable_name: str, initial_value: in
 def get_tui_var(tui: TuiContext, variable_name: str) -> Any:
     '''Return value of variable in TUI context, or None if variable is unknown'''
     return tui.variables.get(variable_name, None)
+
+class SetTuiVariableResult(Enum):
+    Ok = auto()
+    VariableDoesExist = auto()
+    TypeMismatch = auto()
+
+def set_tui_variable(tui: TuiContext, variable_name: str, value: Any) -> SetTuiVariableResult:
+    if variable_name not in tui.variables.keys():
+        return SetTuiVariableResult.VariableDoesExist
+
+    current_var_val = tui.variables[variable_name]
+    if type(value) != type(current_var_val):
+        return SetTuiVariableResult.TypeMismatch
+
+    tui.variables[variable_name] = value
+    return SetTuiVariableResult.Ok
 
 def destroy_tui_variable(tui: TuiContext, variable_name: str) -> None:
     '''Remove variable from TUI context
@@ -794,6 +819,10 @@ def tui_pause(tui: TuiContext) -> None:
     '''Return control back to program code until next mainloop'''
     tui.is_running = False
 
+def tui_emit(tui: TuiContext, event_type: str) -> None:
+    '''Emit event type to event queue'''
+    tui.event_queue.append(event_type)
+
 def tui_add_accelerator_map(tui: TuiContext) -> TuiAcceleratorMap:
     '''Add an accelerator map for creating a layer to process key inputs'''
     key_map: dict[TuiKey, Callable[[TuiContext], None]] = {}
@@ -868,7 +897,7 @@ def draw_layout(tui: TuiContext, layout: TuiLayout):
         if item_index != 0 and layout.padding != 0:
             lines.extend(itertools.repeat("", layout.padding))
 
-        item.start_line = len(lines)
+        item.start_y = len(lines)
         item_text = item.text_render_fn()
         max_item_width = max(len(l) for l in item_text)
         if max_item_width > max_width:
@@ -896,13 +925,17 @@ def draw_layout(tui: TuiContext, layout: TuiLayout):
         tui_draw_text(tui, line[:width], start_x, start_y + line_index)
 
     for item in layout.items:
-        item.post_render_fn(start_x, start_y + item.start_line)
+        item.start_y += start_y
+        item.start_x = start_x
+        item.post_render_fn(item.start_x, item.start_y)
 
-def add_text_to_layout(layout: TuiLayout, text: str):
+def add_text_to_layout(layout: TuiLayout, text: str) -> TuiRenderTarget:
     '''Add text as item to layout'''
-    layout.items.append(TuiRenderTarget(lambda: [ text ]))
+    target = TuiRenderTarget(lambda: [ text ])
+    layout.items.append(target)
+    return target
 
-def add_checkbox_menu_to_layout(layout: TuiLayout, menu: CheckboxMenu):
+def add_checkbox_menu_to_layout(layout: TuiLayout, menu: CheckboxMenu) -> TuiRenderTarget:
     '''Render menu as text for layout item'''
     entry_button_cursor_pairs: list[tuple[CheckboxMenuEntry, tuple[int, int]]] = []
     lines: list[str] = []
@@ -922,9 +955,11 @@ def add_checkbox_menu_to_layout(layout: TuiLayout, menu: CheckboxMenu):
             cursor_x, cursor_y = cursor
             entry.rendered_cursor_pos = (x + cursor_x, y + cursor_y)
 
-    layout.items.append(TuiRenderTarget(render, post_render))
+    target = TuiRenderTarget(render, post_render)
+    layout.items.append(target)
+    return target
 
-def add_menu_to_layout(layout: TuiLayout, menu: Menu) -> None:
+def add_menu_to_layout(layout: TuiLayout, menu: Menu) -> TuiRenderTarget:
     '''Define draw calls to render the menu'''
     entry_button_cursor_pairs: list[tuple[MenuEntry, tuple[int,int]]] = []
 
@@ -942,7 +977,15 @@ def add_menu_to_layout(layout: TuiLayout, menu: Menu) -> None:
             cursor_x, cursor_y = cursor
             entry.rendered_cursor_pos = (x + cursor_x, y + cursor_y)
 
-    layout.items.append(TuiRenderTarget(render, post_render))
+    target = TuiRenderTarget(render, post_render)
+    layout.items.append(target)
+    return target
+
+def add_eval_to_layout(layout: TuiLayout, eval_fn: Callable[[], str]) -> TuiRenderTarget:
+    '''Add text which is evaluated at draw time'''
+    target = TuiRenderTarget(lambda: (eval_fn(), ))
+    layout.items.append(target)
+    return target
 
 def on_quit(_):
     '''Event handler for quitting the program'''
@@ -1173,13 +1216,27 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     # NOTE: this is just first pass code and should be refactored
     word = get_random_word(session)
     answers = session.dictionary[word]
-
-    make_tui_int_variable(tui, "guesses_left", 3)
-    guesses_left = get_tui_int_variable(tui, "guesses_left")
-    display_guesses = lambda g: f"{g} guesses" if g > 1 else "1 guess"
-
     session.total_tests += 1
 
+    # define screen states
+    GUESSING = 0
+    WAITING_TO_RETRY = 0
+
+    # initialise tui variables
+    make_tui_int_variable(tui, "guesses_left", 3)
+    guesses_left = get_tui_int_variable(tui, "guesses_left")
+    if guesses_left is None:
+        raise RuntimeError("Variable could not be set: guesses_left")
+
+    display_guesses = lambda g: f"{g} guesses" if g > 1 else "1 guess"
+
+    make_tui_variable(tui, "answer_prompt", f"Answer ({display_guesses(guesses_left)} left):")
+    make_tui_variable(tui, "answer_response", "")
+    make_tui_variable(tui, "feedback_1", "")
+    make_tui_variable(tui, "feedback_2", "")
+    make_tui_int_variable(tui, "state", GUESSING)
+
+    # draw calls
     tui_begin_draw(tui)
     clear_screen(tui)
 
@@ -1190,42 +1247,112 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
 
     add_text_to_layout(layout, "")
     add_text_to_layout(layout, "Your word is:")
-    add_text_to_layout(layout, "")
     add_text_to_layout(layout, word)
     add_text_to_layout(layout, "")
-    add_text_to_layout(layout, "<answer line 1>")
+    add_eval_to_layout(layout, lambda: get_tui_var(tui, "answer_prompt"))
+
+    response_render_target = add_eval_to_layout(
+            layout, lambda: get_tui_var(tui, "answer_response"))
+
     add_text_to_layout(layout, "")
-    add_text_to_layout(layout, "<answer line 2>")
-    add_text_to_layout(layout, "")
-    add_text_to_layout(layout, "<feedback line>")
+    add_eval_to_layout(layout, lambda: get_tui_var(tui, "feedback_1"))
+    add_eval_to_layout(layout, lambda: get_tui_var(tui, "feedback_2"))
 
     refresh_screen(tui)
     tui_end_draw(tui)
 
     # set initial state
-    # cursor = ...
-    make_tui_variable(tui, "response", "")
+    cursor_x = response_render_target.start_x
+    cursor_y = response_render_target.start_y
+    tui_move_cursor(tui, cursor_x, cursor_y)
 
+    # event handling
     def on_entry_key_press(t: TuiContext, k: TuiKey) -> bool:
-        pass
+        key_str = key_to_str(k)
+        current_response: str = get_tui_var(t, "answer_response")
+        if k == TUI_KEY_BACKSPACE:
+            set_tui_variable(t, "answer_response", current_response[:-1])
+            tui_emit(t, "text_changed")
+        elif len(key_str) > 1: # key is special key
+            pass
+        else:
+            set_tui_variable(t, "answer_response", current_response + key_str)
+            tui_emit(t, "text_changed")
+        return True
 
     def on_text_changed(t: TuiContext, _) -> bool:
-        pass
+        response: str = get_tui_var(t, "answer_response")
+        tui_redraw(t)
+        tui_move_cursor(t,
+                        x=response_render_target.start_x + len(response),
+                        y=response_render_target.start_y)
+        return True
 
     def on_enter(t: TuiContext):
-        ...
+        state = get_tui_int_variable(t, "state")
+        if state == GUESSING:           tui_emit(t, "submit")
+        elif state == WAITING_TO_RETRY: tui_emit(t, "retry")
+        else: raise RuntimeError(f"Unknown state in play_memorize_round_tui: {state}")
+
+    def on_submit(t: TuiContext, _) -> bool:
+        response: str = get_tui_var(t, "answer_response")
+        if response.lower().strip() in answers:
+            session.streak += 1
+            set_tui_variable(t, "feedback_1", f"{congratulation()}")
+            if len(answers) > 1:
+                other_answers = (answer for answer in answers if answer != response)
+                set_tui_variable(
+                        t,
+                        "feedback_2",
+                        f"Other answers could have been {' or '.join(other_answers)}")
+                tui_redraw(t)
+                tui_emit(t, "finish")
+
+        else:
+            set_tui_variable(t, "feedback_1", "Incorrect")
+            set_tui_variable(t, "feedback_2", "Prese Enter to retry...")
+            tui_redraw(t)
+
+            session.streak = 0
+            guesses_left = get_tui_int_variable(t, "guesses_left")
+            if guesses_left is None: raise RuntimeError("Variable missing: guesses_left")
+            guesses_left -= 1
+            set_tui_int_variable(t, "guesses_left", guesses_left)
+
+            set_tui_int_variable(t, "state", WAITING_TO_RETRY)
+
+        return True
+
+    def on_retry(t: TuiContext, _) -> bool:
+        guesses_left = get_tui_int_variable(t, "guesses_left")
+        set_tui_variable(t, "answer_prompt", f"Answer ({display_guesses(guesses_left)} left):")
+        set_tui_variable(t, "answer_response", "")
+        set_tui_variable(t, "feedback_1", "")
+        set_tui_variable(t, "feedback_2", "")
+        set_tui_int_variable(t, "state", GUESSING)
+        return True
 
     def on_finish(t: TuiContext, _) -> bool:
-        pass
+        tui_pause(t)
+        return True
 
+    tui_add_callback(tui, TUI_KEY_EVENT, on_entry_key_press)
+    tui_add_callback(tui, "text_changed", on_text_changed)
+    tui_add_callback(tui, "submit", on_submit)
+    tui_add_callback(tui, "retry", on_retry)
+    tui_add_callback(tui, "finish", on_finish)
     accel_map = tui_add_accelerator_map(tui)
     map_keys_callback(accel_map, TUI_KEY_ENTER, on_enter)
-    #tui_add_callback(tui, TUI_KEY_EVENT, on_entry_key_press)
 
     tui_mainloop(tui)
 
+    # cleanup
     destroy_tui_variable(tui, "guesses_left")
-    destroy_tui_variable(tui, "response")
+    destroy_tui_variable(tui, "answer_prompt")
+    destroy_tui_variable(tui, "answer_response")
+    destroy_tui_variable(tui, "feedback_1")
+    destroy_tui_variable(tui, "feedback_2")
+    destroy_tui_variable(tui, "state")
     tui_destroy_accelerator_map(tui, accel_map)
 
 def ask_more_rounds_tui(tui: TuiContext) -> int:
@@ -1252,16 +1379,13 @@ def main_tui_mode(stdscr: curses.window, classes: list[Class]) -> None: # type: 
     tui = init_tui_context(stdscr)
     accel_map = tui_add_accelerator_map(tui)
     map_key_callback(accel_map, as_ctrl_key('c'), on_quit)
-    try:
-        session = configure_session_tui(tui, classes)
-        play_memorize_game_tui(tui, session)
-        display_summary_screen(session)
-        # TODO remove testing code
-        tui_draw_text(tui, f"{session=}", 0, 0)
-        tui_mainloop(tui)
 
-    except UserQuit:
-        return
+    session = configure_session_tui(tui, classes)
+    play_memorize_game_tui(tui, session)
+    display_summary_screen(session)
+    # TODO remove testing code
+    tui_draw_text(tui, f"{session=}", 0, 0)
+    tui_mainloop(tui)
 
 argparser = ArgumentParser(description = "Practice learning languages")
 argparser.add_argument('--no-curses', action = 'store_true', help = \
@@ -1274,7 +1398,12 @@ def main():
         main_terminal_mode(classes)
 
     else:
-        curses.wrapper(main_tui_mode, classes)  # type: ignore
+        try:
+            curses.wrapper(main_tui_mode, classes)  # type: ignore
+
+        except UserQuit:
+            print("Quitting...")
+            return
 
 if __name__ == "__main__":
     main()
