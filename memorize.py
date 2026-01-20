@@ -596,7 +596,9 @@ class TuiLayout:
     tui: TuiContext
     centered_x: bool
     centered_y: bool
-    padding: int
+    padding:    int
+    min_width:  int
+    min_height: int
 
     offset_x: int = 0
     offset_y: int = 0
@@ -721,13 +723,21 @@ def tui_add_callback(
         callback_stack = [ callback ]
         tui.callbacks[event_type] = callback_stack
         return True
+    elif callback in callback_stack:
+        return False
+    else:
+        callback_stack.insert(0, callback)
+        return True
 
-    for known_callback in callback_stack:
-        if id(known_callback) == id(callback):
-            return False
-
-    callback_stack.insert(0, callback)
-    return True
+def tui_remove_callback(
+        tui:TuiContext,
+        event_type: str,
+        callback: Callable[[TuiContext, TuiKey], bool]
+        ) -> None:
+    '''Remove registered callback handlers'''
+    callback_stack = tui.callbacks.get(event_type, None)
+    if callback_stack is None: return
+    if callback in callback_stack: callback_stack.remove(callback)
 
 def tui_begin_draw(tui: TuiContext) -> None:
     '''Prepare TUI context for drawing the next screen state'''
@@ -789,7 +799,7 @@ def _tui_process_event_callback(t: TuiContext, k: TuiKey, s: TuiEventCallbackSta
 
 def _tui_process_event_queue(t: TuiContext, k: TuiKey) -> None:
     '''Process event queue'''
-    while len(t.event_queue) != -0:
+    while len(t.event_queue) != 0:
         event_type = t.event_queue.pop(0)
         callback_stack = t.callbacks.get(event_type, None)
         if callback_stack is None:
@@ -879,12 +889,14 @@ def make_tui_layout(
         tui: TuiContext, *,
         centered_x: bool = False,
         centered_y: bool = False,
-        padding   : int  = 0
+        padding   : int  = 0,
+        min_width : int  = -1,
+        min_height: int  = -1
         ) -> TuiLayout:
     '''Create automatic layout'''
     if padding < 0:
         raise ValueError(f"TuiLayout padding must be >= 0: {padding}")
-    layout = TuiLayout(tui, centered_x, centered_y, padding)
+    layout = TuiLayout(tui, centered_x, centered_y, padding, min_width, min_height)
     tui.draw_stack.append(lambda t: draw_layout(t, layout))
     return layout
 
@@ -905,8 +917,8 @@ def draw_layout(tui: TuiContext, layout: TuiLayout):
 
         lines.extend(item_text)
 
-    width = max_width
-    height = len(lines)
+    width = max(layout.min_width, max_width)
+    height = max(layout.min_height, len(lines))
     screen_height,screen_width = get_tui_screen_size(tui)
 
     # TODO: implement display offsets
@@ -1011,7 +1023,7 @@ def select_categories_from_classes_screen(tui: TuiContext, classes: list[Class])
     tui_begin_draw(tui)
     clear_screen(tui)
 
-    layout = make_tui_layout(tui, centered_x = True, centered_y = True, padding = 1)
+    layout = make_tui_layout(tui, centered_x = True, centered_y = True, padding = 1, min_width = 50)
     add_text_to_layout(layout, title_str)
     for menu in menus:
         add_checkbox_menu_to_layout(layout, menu)
@@ -1133,7 +1145,7 @@ def display_selection_menu(
 
     tui_begin_draw(tui)
     clear_screen(tui)
-    layout = make_tui_layout(tui, centered_x = True, centered_y = True, padding = 1)
+    layout = make_tui_layout(tui, centered_x = True, centered_y = True, padding = 1, min_width = 50)
     add_menu_to_layout(layout, menu)
     refresh_screen(tui)
     tui_end_draw(tui)
@@ -1219,8 +1231,9 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     session.total_tests += 1
 
     # define screen states
-    GUESSING = 0
-    WAITING_TO_RETRY = 0
+    GUESSING           = 0
+    WAITING_TO_RETRY   = 1
+    WAITING_TO_FINISH  = 2
 
     # initialise tui variables
     make_tui_int_variable(tui, "guesses_left", 3)
@@ -1240,7 +1253,7 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     tui_begin_draw(tui)
     clear_screen(tui)
 
-    layout = make_tui_layout(tui, centered_x=True, centered_y=True)
+    layout = make_tui_layout(tui, centered_x=True, centered_y=True, min_width = 50)
     add_text_to_layout(layout, f"Test #{session.total_tests}")
     if session.streak > MINIMUM_STREAK_DISPLAY:
         add_text_to_layout(layout, f"Streak: {session.streak}")
@@ -1253,6 +1266,7 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
 
     response_render_target = add_eval_to_layout(
             layout, lambda: get_tui_var(tui, "answer_response"))
+    make_tui_variable(tui, "entry", response_render_target)
 
     add_text_to_layout(layout, "")
     add_eval_to_layout(layout, lambda: get_tui_var(tui, "feedback_1"))
@@ -1267,7 +1281,16 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     tui_move_cursor(tui, cursor_x, cursor_y)
 
     # event handling
+    def move_cursor_to_entry(t: TuiContext):
+        response: str = get_tui_var(t, "answer_response")
+        entry: TuiRenderTarget = get_tui_var(t, "entry")
+        tui_move_cursor(t, x=entry.start_x + len(response), y=entry.start_y)
+
     def on_entry_key_press(t: TuiContext, k: TuiKey) -> bool:
+        state = get_tui_int_variable(t, "state")
+        if state != GUESSING:
+            return True
+
         key_str = key_to_str(k)
         current_response: str = get_tui_var(t, "answer_response")
         if k == TUI_KEY_BACKSPACE:
@@ -1281,17 +1304,15 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
         return True
 
     def on_text_changed(t: TuiContext, _) -> bool:
-        response: str = get_tui_var(t, "answer_response")
         tui_redraw(t)
-        tui_move_cursor(t,
-                        x=response_render_target.start_x + len(response),
-                        y=response_render_target.start_y)
+        move_cursor_to_entry(t)
         return True
 
     def on_enter(t: TuiContext):
         state = get_tui_int_variable(t, "state")
-        if state == GUESSING:           tui_emit(t, "submit")
-        elif state == WAITING_TO_RETRY: tui_emit(t, "retry")
+        if state == GUESSING:            tui_emit(t, "submit")
+        elif state == WAITING_TO_RETRY:  tui_emit(t, "retry")
+        elif state == WAITING_TO_FINISH: tui_emit(t, "finish")
         else: raise RuntimeError(f"Unknown state in play_memorize_round_tui: {state}")
 
     def on_submit(t: TuiContext, _) -> bool:
@@ -1305,21 +1326,29 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
                         t,
                         "feedback_2",
                         f"Other answers could have been {' or '.join(other_answers)}")
-                tui_redraw(t)
-                tui_emit(t, "finish")
+
+            set_tui_int_variable(t, "state", WAITING_TO_FINISH)
+            tui_redraw(t)
+            move_cursor_to_entry(t)
 
         else:
             set_tui_variable(t, "feedback_1", "Incorrect")
             set_tui_variable(t, "feedback_2", "Prese Enter to retry...")
-            tui_redraw(t)
 
             session.streak = 0
             guesses_left = get_tui_int_variable(t, "guesses_left")
-            if guesses_left is None: raise RuntimeError("Variable missing: guesses_left")
-            guesses_left -= 1
-            set_tui_int_variable(t, "guesses_left", guesses_left)
+            if guesses_left is None:
+                raise RuntimeError("Variable missing: guesses_left")
 
+            guesses_left -= 1
+            if guesses_left == 0:
+                tui_emit(t, "finish")
+
+            set_tui_int_variable(t, "guesses_left", guesses_left)
+            set_tui_variable(t, "answer_prompt", f"Answer ({display_guesses(guesses_left)} left):")
             set_tui_int_variable(t, "state", WAITING_TO_RETRY)
+            tui_redraw(t)
+            move_cursor_to_entry(t)
 
         return True
 
@@ -1330,6 +1359,8 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
         set_tui_variable(t, "feedback_1", "")
         set_tui_variable(t, "feedback_2", "")
         set_tui_int_variable(t, "state", GUESSING)
+        tui_redraw(t)
+        move_cursor_to_entry(t)
         return True
 
     def on_finish(t: TuiContext, _) -> bool:
@@ -1341,6 +1372,7 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     tui_add_callback(tui, "submit", on_submit)
     tui_add_callback(tui, "retry", on_retry)
     tui_add_callback(tui, "finish", on_finish)
+
     accel_map = tui_add_accelerator_map(tui)
     map_keys_callback(accel_map, TUI_KEY_ENTER, on_enter)
 
@@ -1353,6 +1385,12 @@ def play_memorize_round_tui(tui: TuiContext, session: PracticeSession) -> None:
     destroy_tui_variable(tui, "feedback_1")
     destroy_tui_variable(tui, "feedback_2")
     destroy_tui_variable(tui, "state")
+    destroy_tui_variable(tui, "entry")
+    tui_remove_callback(tui, TUI_KEY_EVENT, on_entry_key_press)
+    tui_remove_callback(tui, "text_changed", on_text_changed)
+    tui_remove_callback(tui, "submit", on_submit)
+    tui_remove_callback(tui, "retry", on_retry)
+    tui_remove_callback(tui, "finish", on_finish)
     tui_destroy_accelerator_map(tui, accel_map)
 
 def ask_more_rounds_tui(tui: TuiContext) -> int:
@@ -1372,8 +1410,37 @@ def play_memorize_game_tui(tui: TuiContext, session: PracticeSession) -> None:
         if rounds_left == 0:
             rounds_left = ask_more_rounds_tui(tui)
 
-def display_summary_screen(session: PracticeSession) -> None:
-    ...
+def display_summary_screen(tui: TuiContext, session: PracticeSession) -> None:
+    '''Display results of practice session'''
+    # draw calls
+    tui_begin_draw(tui)
+    clear_screen(tui)
+
+    layout = make_tui_layout(tui, centered_x=True, centered_y=True, min_width=50)
+    add_text_to_layout(layout, f"Total test: {session.total_tests}")
+    if len(session.missed_words) == 0:
+        add_text_to_layout(layout, "There were no missed words")
+    else:
+        add_text_to_layout(layout, "Missed words:")
+        for word in session.missed_words:
+            add_text_to_layout(layout, f"    {word}")
+
+    add_text_to_layout(layout, "")
+    add_text_to_layout(layout, "Press any key to quit...")
+
+    refresh_screen(tui)
+    tui_end_draw(tui)
+
+    # event handling
+    def on_key_press(t: TuiContext, _):
+        tui_pause(t)
+        return True
+
+    tui_add_callback(tui, TUI_KEY_EVENT, on_key_press)
+    tui_mainloop(tui)
+
+    # cleanup
+    tui_remove_callback(tui, TUI_KEY_EVENT, on_key_press)
 
 def main_tui_mode(stdscr: curses.window, classes: list[Class]) -> None: # type: ignore
     tui = init_tui_context(stdscr)
@@ -1382,10 +1449,7 @@ def main_tui_mode(stdscr: curses.window, classes: list[Class]) -> None: # type: 
 
     session = configure_session_tui(tui, classes)
     play_memorize_game_tui(tui, session)
-    display_summary_screen(session)
-    # TODO remove testing code
-    tui_draw_text(tui, f"{session=}", 0, 0)
-    tui_mainloop(tui)
+    display_summary_screen(tui, session)
 
 argparser = ArgumentParser(description = "Practice learning languages")
 argparser.add_argument('--no-curses', action = 'store_true', help = \
