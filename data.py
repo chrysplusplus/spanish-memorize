@@ -1,6 +1,7 @@
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from collections import namedtuple
+from typing import Any, Optional, Self
 
 import random
 
@@ -9,13 +10,41 @@ from prog_signal import VocabularyParsingError
 RECENT_WORDS_COUNT = 10
 MINIMUM_STREAK_DISPLAY = 5
 
+def obj_to_str(obj_str: Any) -> Optional[str]:
+    return obj_str if isinstance(obj_str, str) else None
+
+def obj_to_list_str(obj_ls: list) -> Optional[list[str]]:
+    return obj_ls if all(isinstance(o, str) for o in obj_ls) else None
+
+def obj_to_str_or_list_str(obj_s: Any) -> Optional[str | list[str]]:
+    return obj_to_list_str(obj_s) \
+            if isinstance(obj_s, list) \
+            else obj_to_str(obj_s)
+
 class CategoryType(Enum):
     Unknown = auto()
     Vocabulary = auto()
 
+def category_type_str_to_enum(s: str) -> CategoryType:
+    '''Convert string to enum value'''
+    str_map = {
+            "vocabulary": CategoryType.Vocabulary }
+    return str_map.get(s, CategoryType.Unknown)
+
 @dataclass
 class CategoryEntry:
     data: dict[str, str | list[str]]
+
+    @classmethod
+    def from_dict(cls: type[Self], d: dict) -> Self:
+        '''Create from dictionary'''
+        data_kv_pairs = [
+                (obj_to_str(k), obj_to_str_or_list_str(v))
+                for k, v in d.items()]
+
+        return cls({
+            k: v for k, v in data_kv_pairs
+            if k is not None and v is not None})
 
 @dataclass
 class Category:
@@ -23,10 +52,37 @@ class Category:
     type_: CategoryType
     contents: list[CategoryEntry]
 
+    @classmethod
+    def from_dict(cls: type[Self], d: dict) -> Optional[Self]:
+        '''Create from dictionary'''
+        if not isinstance(name := d.get("category_name", None), str):
+            return None
+        if not isinstance(type_ := d.get("category_type", None), str):
+            return None
+        if not isinstance(entries := d.get("category_contents", None), list):
+            return None
+        contents = (CategoryEntry.from_dict(entry) for entry in entries)
+        return cls(
+                name,
+                category_type_str_to_enum(type_),
+                [entry for entry in contents if entry is not None])
+
 @dataclass
 class Class:
     name: str
     categories: list[Category]
+
+    @classmethod
+    def from_dict(cls: type[Self], d: dict) -> Optional[Self]:
+        '''Create from dictionary'''
+        if not isinstance(name := d.get("class_name", None), str):
+            return None
+        if not isinstance(cat_dicts := d.get("categories", None), list):
+            return None
+        categories = (Category.from_dict(d) for d in cat_dicts)
+        return cls(
+                name,
+                [category for category in categories if category is not None])
 
 # NOTE: languages are structured like in the json file:
 #   spanish -> english (many -> one)

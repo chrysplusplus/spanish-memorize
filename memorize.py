@@ -1,16 +1,14 @@
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import Optional, Any, Iterable, TypeVar
+from typing import Any, Iterable, TypeVar
 
 import json
 import re
 import importlib.util
 
 from data import (
-        CategoryEntry, CategoryType, Category, Class, LanguagesKey, PracticeSession,
-        make_language_dictionary, get_random_word, MINIMUM_STREAK_DISPLAY, congratulation,
-        comiseration
-        )
+        Category, Class, LanguagesKey, PracticeSession, make_language_dictionary,
+        get_random_word, MINIMUM_STREAK_DISPLAY, congratulation, comiseration)
 from prog_signal import UserQuit, UserDefaultSelection
 from tui import run_main_tui_mode
 
@@ -30,75 +28,6 @@ T = TypeVar('T')
 def filter_exists(iterable: Iterable[T | None]) -> Iterable[T]:
     return (o for o in iterable if o is not None)
 
-def json_to_str(json_str: Any) -> Optional[str]:
-    return json_str if isinstance(json_str, str) else None
-
-def json_to_list_str(json_ls: list) -> Optional[list[str]]:
-    return json_ls if all(isinstance(o, str) for o in json_ls) else None
-
-def json_to_str_or_list_str(json_s: Any) -> Optional[str | list[str]]:
-    return json_to_list_str(json_s) \
-            if isinstance(json_s, list) \
-            else json_to_str(json_s)
-
-def json_to_entry(json_obj: Any) -> Optional[CategoryEntry]:
-    '''Attempt to convert JSON object to CategoryEntry object'''
-    if not isinstance(json_obj, dict):
-        return None
-
-    data_as_tuple = [(json_to_str(k), json_to_str_or_list_str(v))
-                     for k,v in json_obj.items()]
-
-    return CategoryEntry({
-        k:v for k,v in data_as_tuple
-        if k is not None and v is not None})
-
-def category_type_str_to_enum(category_type: str) -> CategoryType:
-    '''Convert JSON category type strings to enum values'''
-    str_map = {
-            "vocabulary": CategoryType.Vocabulary }
-    return str_map.get(category_type, CategoryType.Unknown)
-
-def json_to_category(json_obj: Any) -> Optional[Category]:
-    '''Attempt to convert JSON object to Category object'''
-    if not isinstance(json_obj, dict):
-        return None
-
-    name = json_obj.get("category_name", None)
-    if not isinstance(name, str):
-        return None
-
-    type_ = json_obj.get("category_type", None)
-    if not isinstance(type_, str):
-        return None
-
-    json_entries = json_obj.get("category_contents", None)
-    if not isinstance(json_entries, list):
-        return None
-
-    contents = [json_to_entry(json_entry) for json_entry in json_entries]
-    return Category(
-            name,
-            category_type_str_to_enum(type_),
-            list(filter_exists(contents))
-            )
-
-def json_to_class(json_obj: Any) -> Optional[Class]:
-    '''Attempt to convert JSON object to Class object'''
-    if not isinstance(json_obj, dict):
-        return None
-
-    name = json_obj.get("class_name", None)
-    if not isinstance(name, str):
-        return None
-
-    json_categories = json_obj.get("categories", None)
-    if not isinstance(json_categories, list):
-        return None
-
-    categories = [json_to_category(json_category) for json_category in json_categories]
-    return Class(name, list(filter_exists(categories)))
-
 def load_class_file(path: Path) -> Any:
     result: Any = None
     with open(path) as file:
@@ -108,7 +37,7 @@ def load_class_file(path: Path) -> Any:
 def load_classes() -> list[Class]:
     class_file_paths = FILES_DIR.glob(CLASS_FILE_GLOB_PATTERN)
     json_classes = [load_class_file(path) for path in class_file_paths]
-    classes = [json_to_class(json_class) for json_class in json_classes]
+    classes = [Class.from_dict(json_class) for json_class in json_classes]
     return list(filter_exists(classes))
 
 def print_classes_summary(classes: list[Class]) -> None:
