@@ -5,7 +5,7 @@ from tui import (
          key_to_str, on_quit)
 from data import (
         Category, Class, LanguagesKey, MINIMUM_STREAK_DISPLAY, PracticeSession,
-        comiseration, congratulation, get_random_word, make_language_dictionary)
+        comiseration, congratulation, make_language_dictionary, get_shuffled_word)
 
 import curses
 
@@ -213,7 +213,7 @@ class PlayMemorizeScreen(ScreenBase):
 
     def initialise_game_variables(self):
         '''Initialise variables for game; only run if there are ronuds left'''
-        self.word = get_random_word(self.session)
+        self.word = get_shuffled_word(self.session)
         self.answers = self.session.dictionary[self.word]
         self.session.total_tests += 1
 
@@ -369,6 +369,9 @@ class PlayMemorizeScreen(ScreenBase):
             self.move_cursor_to_entry(t)
             self.state = GAME_WAITING_TO_RETRY
 
+            if self.word not in self.session.practice_words:
+                self.session.practice_words.append(self.word)
+
     def on_submit(self, t: TuiContext, _) -> bool:
         if self.answer_response.lower().strip() in self.answers:
             self.correct(t)
@@ -451,11 +454,21 @@ class SummaryScreen(ScreenBase):
         self.layout = Layout(centered_x=True, centered_y=True, min_width=50)
         self.layout.add_to_tui(tui)
         self.layout.add_text(f"Total tests: {self.session.total_tests}")
+
+        self.layout.add_text("")
         if len(self.session.missed_words) == 0:
             self.layout.add_text("There were no missed words")
         else:
             self.layout.add_text("Missed words:")
             for word in self.session.missed_words:
+                self.layout.add_text(f"    {word}")
+
+        self.layout.add_text("")
+        if len(self.session.practice_words) == 0:
+            self.layout.add_text("There are no words to practice")
+        else:
+            self.layout.add_text("Words to practice:")
+            for word in self.session.practice_words:
                 self.layout.add_text(f"    {word}")
 
         self.layout.add_text("")

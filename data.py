@@ -97,6 +97,7 @@ class PracticeSession:
     streak: int = 0
     missed_words: list[str] = field(default_factory = list[str])
     recent_words: list[str] = field(default_factory = list[str])
+    practice_words: list[str] = field(default_factory=list[str])
     use_recent_words = True
 
 DictionaryEntry = namedtuple("DictionaryEntry", "languages translation words")
@@ -172,6 +173,17 @@ def get_random_word(session: PracticeSession) -> str:
 
     add_to_recent_words(word, session)
     return word
+
+g_shuffled_words: list[str] = []
+
+def get_shuffled_word(session: PracticeSession) -> str:
+    '''Get random word by shuffling words'''
+    global g_shuffled_words
+    if len(g_shuffled_words) == 0:
+        g_shuffled_words = list(session.dictionary.keys())
+        random.shuffle(g_shuffled_words)
+
+    return g_shuffled_words.pop()
 
 def congratulation() -> str:
     '''Random congratulation'''

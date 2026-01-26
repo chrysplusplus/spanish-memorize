@@ -2,13 +2,14 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Any, Iterable, TypeVar
 
-import json
-import re
 import importlib.util
+import json
+import random
+import re
 
 from data import (
-        Category, Class, LanguagesKey, PracticeSession, make_language_dictionary,
-        get_random_word, MINIMUM_STREAK_DISPLAY, congratulation, comiseration)
+        Category, Class, LanguagesKey, MINIMUM_STREAK_DISPLAY, PracticeSession,
+        RECENT_WORDS_COUNT, comiseration, congratulation, make_language_dictionary)
 from prog_signal import UserQuit, UserDefaultSelection
 from memorize_tui import run_main_tui_mode
 
@@ -32,7 +33,7 @@ def load_class_file(path: Path) -> Any:
     return result
 
 def load_classes() -> list[Class]:
-    class_file_paths = FILES_DIR.glob(CLASS_FILE_GLOB_PATTERN)
+    class_file_paths = sorted(FILES_DIR.glob(CLASS_FILE_GLOB_PATTERN))
     json_classes = [load_class_file(path) for path in class_file_paths]
     classes = [Class.from_dict(json_class) for json_class in json_classes]
     return [class_ for class_ in classes if class_ is not None]
@@ -186,9 +187,64 @@ def ask_rounds() -> int:
     print()
     return selection[choice - 1]
 
+def congratulation() -> str:
+    '''Random congratulation'''
+    congratulations = (
+            "That is correct!",
+            "Correct!",
+            "Well done!",
+            "This is proof of your genius",
+            )
+    return random.choice(congratulations)
+
+def comiseration() -> str:
+    '''Random comiseration'''
+    comiserations = (
+            "Too bad!",
+            "Too difficult?",
+            "Oofie-doodle",
+            "You didn't get that one"
+            )
+    return random.choice(comiserations)
+
+def add_to_recent_words(word: str, session: PracticeSession) -> None:
+    '''Add word to list of recent words, trimming the list if required'''
+    if not session.use_recent_words:
+        return
+
+    if len(list(session.dictionary.keys())) <= RECENT_WORDS_COUNT:
+        session.use_recent_words = False
+        return
+
+    session.recent_words.append(word)
+    if len(session.recent_words) > RECENT_WORDS_COUNT:
+        session.recent_words.pop(0)
+
+def get_random_word(session: PracticeSession) -> str:
+    '''Get random word that hasn't recently been seen'''
+    fn = lambda: random.choice(list(session.dictionary.keys()))
+    word = fn()
+    while word in session.recent_words:
+        word = fn()
+
+    add_to_recent_words(word, session)
+    return word
+
+g_shuffled_words: list[str] = []
+
+def get_shuffled_word(session: PracticeSession) -> str:
+    '''Get random word by shuffling words'''
+    global g_shuffled_words
+    if len(g_shuffled_words) == 0:
+        g_shuffled_words = list(session.dictionary.keys())
+        random.shuffle(g_shuffled_words)
+
+    return g_shuffled_words.pop()
+
 def play_memorize_round(session: PracticeSession) -> None:
     '''Play round of Memorize'''
-    word = get_random_word(session)
+    #word = get_random_word(session)
+    word = get_shuffled_word(session)
     answers = session.dictionary[word]
 
     if session.streak > MINIMUM_STREAK_DISPLAY:
@@ -230,6 +286,9 @@ def play_memorize_round(session: PracticeSession) -> None:
             session.streak = 0
             guesses_left -= 1
 
+            if word not in session.practice_words:
+                session.practice_words.append(word)
+
     if len(answers) == 1:
         print(f"\n{comiseration()}\nThe correct answer was {answers[0]}\n")
     else:
@@ -265,6 +324,13 @@ def main_terminal_mode(classes: list[Class]) -> None:
     else:
         print(f"Missed words:")
         for word in session.missed_words:
+            print(f"\t{word}")
+
+    if len(session.practice_words) == 0:
+        print("\nThere are no words to practice")
+    else:
+        print("\nWords to practice:")
+        for word in session.practice_words:
             print(f"\t{word}")
 
     input()
