@@ -6,9 +6,7 @@
       "category_type": "vocabulary",
       "category_contents": [
         { "es": [ "el abogado" ], "en": "lawyer m." },
-        { "es": [ "la abogada" ], "en": "lawyer f." },
-        { "es": [ "el activista" ], "en": "activist m." },
-        { "es": [ "la activista" ], "en": "activist f." },
+        { "es": [ "la abogada" ], "en": "lawyer f." }, { "es": [ "el activista" ], "en": "activist m." }, { "es": [ "la activista" ], "en": "activist f." },
         { "es": [ "el actor" ], "en": "actor m." },
         { "es": [ "la actriz" ], "en": "actor f." },
         { "es": [ "el alergólogo" ], "en": "alergist m." },
@@ -332,36 +330,6 @@
         { "es": [ "tocar" ], "en": "touch" },
         { "es": [ "tratar" ], "en": "treat" },
         { "es": [ "volar" ], "en": "fly (not in group)" }
-      ]
-    },
-    {
-      "category_name": "La Mano",
-      "category_type": "vocabulary",
-      "category_contents": [
-        { "es": [ "pulgar" ], "en": "thumb" },
-        { "es": [ "índice" ], "en": "index finger" },
-        { "es": [ "corazón" ], "en": "middle finger" },
-        { "es": [ "anular" ], "en": "ring finger" },
-        { "es": [ "meñique" ], "en": "little finger" },
-        { "es": [ "uña" ], "en": "fingernail" },
-        { "es": [ "palma" ], "en": "palm of the hand" },
-        { "es": [ "yemas de los dedos" ], "en": "fingertips" },
-        { "es": [ "puño" ], "en": "fist" }
-      ]
-    },
-    {
-      "category_name": "Adjectivos",
-      "category_type": "vocabulary",
-      "category_contents": [
-        { "es": [ "bajo" ], "en": "short in stature" },
-        { "es": [ "alto" ], "en": "tall" },
-        { "es": [ "gordo" ], "en": "fat" },
-        { "es": [ "flaco", "delgado" ], "en": "thin" },
-        { "es": [ "guapo" ], "en": "good-looking" },
-        { "es": [ "feo" ], "en": "ugly" },
-        { "es": [ "joven" ], "en": "young" },
-        { "es": [ "viejo" ], "en": "old" },
-        { "es": [ "musculoso" ], "en": "muscly" }
       ]
     }
   ]
