@@ -25,9 +25,6 @@ DEFAULT_NUMBER_OF_ROUNDS = 10
 
 T = TypeVar('T')
 
-def filter_exists(iterable: Iterable[T | None]) -> Iterable[T]:
-    return (o for o in iterable if o is not None)
-
 def load_class_file(path: Path) -> Any:
     result: Any = None
     with open(path) as file:
@@ -38,11 +35,7 @@ def load_classes() -> list[Class]:
     class_file_paths = FILES_DIR.glob(CLASS_FILE_GLOB_PATTERN)
     json_classes = [load_class_file(path) for path in class_file_paths]
     classes = [Class.from_dict(json_class) for json_class in json_classes]
-    return list(filter_exists(classes))
-
-def print_classes_summary(classes: list[Class]) -> None:
-    '''Print summary of loaded classes'''
-    ...
+    return [class_ for class_ in classes if class_ is not None]
 
 # note that indices in the selection are 1-based
 def print_category_selection_screen(classes: list[Class]) -> None:
@@ -258,8 +251,6 @@ def play_memorize_game(session: PracticeSession) -> None:
             rounds_left = ask_rounds() if response.lower() == 'y' else 0
 
 def main_terminal_mode(classes: list[Class]) -> None:
-    print_classes_summary(classes)
-
     try:
         session = configure_session_interactively(classes)
         play_memorize_game(session)

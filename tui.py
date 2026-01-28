@@ -25,6 +25,8 @@ TUI_KEY_BACKSPACE = (curses.KEY_BACKSPACE,)
 
 TUI_KEY_EVENT = ""
 
+TuiKey = tuple[int, ...]
+
 def validate_keystr(key_str: str) -> str:
     '''Trim and validate key representation
 
@@ -33,8 +35,6 @@ def validate_keystr(key_str: str) -> str:
     if len(key_str) == 0 or not key_str.isprintable():
         raise ValueError(f"Invalid key character: {key_str}")
     return key_str[0]
-
-TuiKey = tuple[int, ...]
 
 def as_key(key_str: str) -> TuiKey:
     '''Convert string representing keyboard character to key code
