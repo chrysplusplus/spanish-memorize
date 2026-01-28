@@ -33,7 +33,7 @@ def load_class_file(path: Path) -> Any:
     return result
 
 def load_classes() -> list[Class]:
-    class_file_paths = FILES_DIR.glob(CLASS_FILE_GLOB_PATTERN)
+    class_file_paths = sorted(FILES_DIR.glob(CLASS_FILE_GLOB_PATTERN))
     json_classes = [load_class_file(path) for path in class_file_paths]
     classes = [Class.from_dict(json_class) for json_class in json_classes]
     return [class_ for class_ in classes if class_ is not None]
