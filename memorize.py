@@ -41,6 +41,7 @@ class PracticeSession:
     streak: int = 0
     missed_words: list[str] = field(default_factory = list)
     recent_words: list[str] = field(default_factory = list)
+    practice_words: list[str] = field(default_factory=list) # maybe use a set ??? TODO
     use_recent_words = True
 
 class UserQuit(Exception):
@@ -446,6 +447,9 @@ def play_memorize_round(session: PracticeSession) -> None:
             session.streak = 0
             guesses_left -= 1
 
+            if word not in session.practice_words:
+                session.practice_words.append(word)
+
     if len(answers) == 1:
         print(f"\n{comiseration()}\nThe correct answer was {answers[0]}\n")
     else:
@@ -484,6 +488,13 @@ def main():
     else:
         print(f"Missed words:")
         for word in session.missed_words:
+            print(f"\t{word}")
+
+    if len(session.practice_words) == 0:
+        print("\nThere are no words to practice")
+    else:
+        print("\nWords to practice:")
+        for word in session.practice_words:
             print(f"\t{word}")
 
     input()
