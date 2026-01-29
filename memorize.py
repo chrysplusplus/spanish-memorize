@@ -286,6 +286,9 @@ def play_memorize_round(session: PracticeSession) -> None:
             session.streak = 0
             guesses_left -= 1
 
+            if word not in session.practice_words:
+                session.practice_words.append(word)
+
     if len(answers) == 1:
         print(f"\n{comiseration()}\nThe correct answer was {answers[0]}\n")
     else:
@@ -321,6 +324,13 @@ def main_terminal_mode(classes: list[Class]) -> None:
     else:
         print(f"Missed words:")
         for word in session.missed_words:
+            print(f"\t{word}")
+
+    if len(session.practice_words) == 0:
+        print("\nThere are no words to practice")
+    else:
+        print("\nWords to practice:")
+        for word in session.practice_words:
             print(f"\t{word}")
 
     input()
