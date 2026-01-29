@@ -5,7 +5,7 @@ from tui import (
          key_to_str, on_quit)
 from data import (
         Category, Class, LanguagesKey, MINIMUM_STREAK_DISPLAY, PracticeSession,
-        comiseration, congratulation, get_random_word, make_language_dictionary)
+        comiseration, congratulation, make_language_dictionary, get_shuffled_word)
 
 import curses
 
@@ -213,7 +213,7 @@ class PlayMemorizeScreen(ScreenBase):
 
     def initialise_game_variables(self):
         '''Initialise variables for game; only run if there are ronuds left'''
-        self.word = get_random_word(self.session)
+        self.word = get_shuffled_word(self.session)
         self.answers = self.session.dictionary[self.word]
         self.session.total_tests += 1
 
