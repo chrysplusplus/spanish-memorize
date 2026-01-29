@@ -2,14 +2,14 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Any, Iterable, TypeVar
 
-import json
-import re
 import importlib.util
+import json
 import random
+import re
 
 from data import (
-        Category, Class, LanguagesKey, PracticeSession, make_language_dictionary,
-        get_random_word, MINIMUM_STREAK_DISPLAY, congratulation, comiseration)
+        Category, Class, LanguagesKey, MINIMUM_STREAK_DISPLAY, PracticeSession,
+        RECENT_WORDS_COUNT, comiseration, congratulation, make_language_dictionary)
 from prog_signal import UserQuit, UserDefaultSelection
 from memorize_tui import run_main_tui_mode
 

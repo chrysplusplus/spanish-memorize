@@ -97,6 +97,7 @@ class PracticeSession:
     streak: int = 0
     missed_words: list[str] = field(default_factory = list[str])
     recent_words: list[str] = field(default_factory = list[str])
+    practice_words: list[str] = field(default_factory=list[str])
     use_recent_words = True
 
 DictionaryEntry = namedtuple("DictionaryEntry", "languages translation words")
